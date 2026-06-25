@@ -1,0 +1,32 @@
+# T3 — verbatim-anchor claim extraction (cryptographic, single-turn).
+# A zero-judge faithfulness/hallucination probe: claims must carry exact-substring
+# quotes from the source. The source is defined once (YAML anchor `&source`),
+# injected into the prompt via the `{source_text}` placeholder, and reused as the
+# grader's gold via the `*source` alias — single source of truth, no duplication.
+id: t3_verbatim_anchor
+domain: extraction
+grader: anchor
+mode: single
+infra_repo: null
+timeout_s: 300
+tags: [faithfulness, single-turn, zero-judge, infra-agnostic]
+params:
+  source_text: &source |
+    The bootstrap is a resampling method introduced by Bradley Efron in 1979.
+    It estimates the sampling distribution of a statistic by repeatedly drawing
+    samples, with replacement, from the observed data. Each resample has the same
+    size as the original dataset. Computing the statistic on many such resamples
+    yields an empirical distribution from which confidence intervals can be
+    derived. The percentile interval takes the 2.5th and 97.5th percentiles of
+    the resampled statistics. The method makes few parametric assumptions, which
+    is why it is widely used for small-sample evaluation.
+gold:
+  source_text: *source
+prompt: |
+  From the SOURCE below, extract exactly 5 factual claims. For each claim, provide
+  an EXACT verbatim substring quote from the SOURCE that supports it — copy the
+  characters exactly, do not paraphrase.
+  Return ONLY JSON of the form {"claims":[{"claim":"...","quote":"..."}]}.
+
+  SOURCE:
+  {source_text}
