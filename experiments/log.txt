@@ -1,2 +1,3 @@
 # One-line experiment log (ds_ml_lifecycle.md). Append `YYYY-MM-DD  <one line>`.
 2026-06-25  Phase 0 — repo scaffolded (canonical Python template; Exploration→Development).
+2026-06-25  Phase 1 — runner+worktree. PROBE: env ANTHROPIC_API_KEY is rate-limited (blocked til 2026-07-01); `env -u ANTHROPIC_API_KEY claude -p ... haiku --effort low --output-format json` → SUCCESS via subscription (result "ok", cost 0.0355 metric). Runner strips the key. JSON shapes captured as fixtures (success + rate_limit). 13 tests green.
