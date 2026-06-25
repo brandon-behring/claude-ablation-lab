@@ -1,0 +1,16 @@
+# T2 — /research-plan generation (representative agentic, agent-loop).
+# Exercises the user's ACTUAL skill infrastructure: run in a workdir where the
+# /research-plan skill + research CLAUDE.md load, capture the produced
+# research_plan.md, and grade it with research_toolkit's standalone validator.
+#
+# Live agentic execution + artifact capture into the transcript = Phase 3.
+id: t2_research_plan
+domain: research-synthesis
+grader: validator
+mode: agent
+infra_repo: ~/Claude/research_toolkit
+timeout_s: 1200
+tags: [agentic, agent-loop, skill-infra, validator-graded]
+prompt: "/research-plan time-series anomaly detection for industrial sensor data"
+gold:
+  toolkit_root: ~/Claude/research_toolkit

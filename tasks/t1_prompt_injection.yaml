@@ -1,0 +1,20 @@
+# T1 — prompt-injection classification (clean-signal calibration, single-turn).
+# Infra-agnostic (no project config exercised). The model classifies a balanced
+# batch in one call; the grader reports AUROC/F1 vs gold with a within-cell
+# bootstrap CI and a shuffled-label leakage gate.
+#
+# prompt + gold are built LIVE in Phase 3 from `params` via t1_dataset
+# (seed-stable 30/30 subsample of the holdout parquet) — not stored here.
+id: t1_prompt_injection
+domain: classification
+grader: classification
+mode: single
+infra_repo: null
+timeout_s: 300
+tags: [calibration, single-turn, eval-toolkit, infra-agnostic]
+params:
+  gold_parquet: ~/Claude/prompt_injection_detector/data/final_holdout/final_holdout.parquet
+  subsample_n: 60
+  seed: 42
+gold: {}
+prompt: ""
