@@ -7,6 +7,7 @@ subprocess environment so `claude` falls back to the claude.ai/subscription logi
 
 Status taxonomy keeps infra failure separate from model quality (the talk's
 failure-mode #2): `ok | rate_limited | infra_error | timeout | parse_fail`.
+Every run writes a full diagnostic envelope to a transcript sidecar.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ __all__ = [
     "ClaudeCodeRunner",
     "classify_status",
     "result_from_payload",
+    "extract_json",
     "AUTH_ENV_STRIP",
 ]
 
@@ -45,6 +47,7 @@ class RunResult:
     output: str
     cost_usd: float
     latency_s: float
+    returncode: int | None
     model_resolved: str | None
     num_turns: int
     session_id: str | None
@@ -57,18 +60,33 @@ class RunResult:
 class Runner(Protocol):
     """A substrate that runs a prompt at a given model+effort and reports cost/latency."""
 
-    def run(
-        self,
-        prompt: str,
-        *,
-        model: str,
-        effort: str,
-        cwd: Path,
-    ) -> RunResult: ...
+    def run(self, prompt: str, *, model: str, effort: str, cwd: Path) -> RunResult: ...
+
+
+def extract_json(text: str) -> dict[str, Any] | None:
+    """Best-effort extraction of the JSON result object from CLI stdout.
+
+    Tolerates preamble/warning lines that some `claude` invocations print before the
+    JSON: try the whole string, then each line bottom-up, then a first-`{`…last-`}`
+    slice. Returns None if nothing parses to a dict.
+    """
+    candidates: list[str] = [text]
+    candidates += [ln for ln in reversed(text.splitlines()) if ln.strip().startswith("{")]
+    first, last = text.find("{"), text.rfind("}")
+    if first != -1 and last > first:
+        candidates.append(text[first : last + 1])
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def classify_status(payload: dict[str, Any]) -> RunStatus:
-    """Map a parsed `claude --output-format json` payload to a RunStatus.
+    """Map a parsed payload to a RunStatus (payload-only; returncode applied later).
 
     Usage/rate-limit errors are `rate_limited` (back off, don't blame the model);
     any other `is_error` is `infra_error`; otherwise `ok`.
@@ -96,15 +114,24 @@ def result_from_payload(
     run_id: str,
     latency_s: float,
     transcript_path: str | None,
+    returncode: int | None = None,
 ) -> RunResult:
-    """Build a RunResult from a parsed JSON payload (pure; unit-tested on fixtures)."""
+    """Build a RunResult from a parsed JSON payload (pure; unit-tested on fixtures).
+
+    A nonzero exit with an otherwise-`ok` payload is overridden to `infra_error`:
+    the CLI signalled failure even though the JSON looks clean, so the run is suspect.
+    """
+    status = classify_status(payload)
+    if returncode not in (0, None) and status == "ok":
+        status = "infra_error"
     usage = payload.get("usage")
     return RunResult(
         run_id=run_id,
-        status=classify_status(payload),
+        status=status,
         output=str(payload.get("result", "")),
         cost_usd=float(payload.get("total_cost_usd") or 0.0),
         latency_s=latency_s,
+        returncode=returncode,
         model_resolved=_resolve_model(payload),
         num_turns=int(payload.get("num_turns") or 0),
         session_id=payload.get("session_id"),
@@ -119,7 +146,7 @@ class ClaudeCodeRunner:
     """Runs `claude -p` headless, parsing the JSON result into a RunResult.
 
     Args:
-        transcript_dir: where full per-run JSON traces are written (the talk's
+        transcript_dir: where full per-run JSON envelopes are written (the talk's
             "read your transcripts"). None disables sidecar dumps.
         timeout_s: hard wall-clock cap per cell (→ status `timeout`).
         max_budget_usd: soft per-call runaway-loop stop passed to `--max-budget-usd`.
@@ -155,17 +182,41 @@ class ClaudeCodeRunner:
             env.pop(key, None)
         return env
 
-    def _write_transcript(self, run_id: str, text: str) -> str | None:
+    def _write_transcript(self, run_id: str, envelope: dict[str, Any]) -> str | None:
         if self.transcript_dir is None:
             return None
         self.transcript_dir.mkdir(parents=True, exist_ok=True)
         path = self.transcript_dir / f"{run_id}.json"
-        path.write_text(text, encoding="utf-8")
+        path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
         return str(path)
+
+    def _failure(
+        self,
+        run_id: str,
+        status: RunStatus,
+        output: str,
+        latency_s: float,
+        transcript_path: str | None,
+    ) -> RunResult:
+        return RunResult(
+            run_id=run_id,
+            status=status,
+            output=output,
+            cost_usd=0.0,
+            latency_s=latency_s,
+            returncode=None,
+            model_resolved=None,
+            num_turns=0,
+            session_id=None,
+            usage={},
+            transcript_path=transcript_path,
+            raw=None,
+        )
 
     def run(self, prompt: str, *, model: str, effort: str, cwd: Path) -> RunResult:
         run_id = uuid.uuid4().hex
         argv = self._argv(prompt, model, effort)
+        base_envelope: dict[str, Any] = {"argv": argv, "cwd": str(cwd)}
         start = time.monotonic()
         try:
             proc = subprocess.run(
@@ -177,43 +228,49 @@ class ClaudeCodeRunner:
                 timeout=self.timeout_s,
                 check=False,
             )
-        except subprocess.TimeoutExpired:
+        except subprocess.TimeoutExpired as e:
             latency_s = time.monotonic() - start
-            return RunResult(
-                run_id=run_id,
-                status="timeout",
-                output=f"timeout after {self.timeout_s}s",
-                cost_usd=0.0,
-                latency_s=latency_s,
-                model_resolved=None,
-                num_turns=0,
-                session_id=None,
-                usage={},
-                transcript_path=None,
-                raw=None,
+            tp = self._write_transcript(
+                run_id,
+                {
+                    **base_envelope,
+                    "returncode": None,
+                    "stdout": e.stdout or "",
+                    "stderr": e.stderr or "",
+                    "timeout": True,
+                    "parsed_ok": False,
+                },
             )
-        latency_s = time.monotonic() - start
-        transcript_path = self._write_transcript(run_id, proc.stdout)
+            return self._failure(
+                run_id, "timeout", f"timeout after {self.timeout_s}s", latency_s, tp
+            )
+        except (FileNotFoundError, NotADirectoryError, OSError) as e:
+            # Missing `claude`, bad cwd, argv too large, etc. — never crash the sweep.
+            latency_s = time.monotonic() - start
+            tp = self._write_transcript(
+                run_id, {**base_envelope, "error": str(e), "parsed_ok": False}
+            )
+            return self._failure(run_id, "infra_error", str(e), latency_s, tp)
 
-        try:
-            payload: dict[str, Any] = json.loads(proc.stdout)
-        except (json.JSONDecodeError, ValueError):
-            return RunResult(
-                run_id=run_id,
-                status="parse_fail",
-                output=(proc.stdout or proc.stderr)[:2000],
-                cost_usd=0.0,
-                latency_s=latency_s,
-                model_resolved=None,
-                num_turns=0,
-                session_id=None,
-                usage={},
-                transcript_path=transcript_path,
-                raw=None,
-            )
+        latency_s = time.monotonic() - start
+        payload = extract_json(proc.stdout)
+        tp = self._write_transcript(
+            run_id,
+            {
+                **base_envelope,
+                "returncode": proc.returncode,
+                "stdout": proc.stdout,
+                "stderr": proc.stderr,
+                "parsed_ok": payload is not None,
+            },
+        )
+        if payload is None:
+            status: RunStatus = "infra_error" if proc.returncode != 0 else "parse_fail"
+            return self._failure(run_id, status, (proc.stdout or proc.stderr)[:2000], latency_s, tp)
         return result_from_payload(
             payload,
             run_id=run_id,
             latency_s=latency_s,
-            transcript_path=transcript_path,
+            transcript_path=tp,
+            returncode=proc.returncode,
         )

@@ -12,6 +12,15 @@ A personal **model × thinking-effort × config** ablation/regression harness fo
 - `~/Claude/lever_of_archimedes/patterns/library-design-playbook.md` — Protocols not ABCs; frozen dataclasses; stdlib exceptions.
 - `~/Claude/lever_of_archimedes/patterns/git.md` — commit format (`Co-Authored-By: Claude Opus 4.8`).
 
+## Conventions (style)
+
+Enforceable style is **config — the single source of truth** (`pyproject.toml`: ruff `E,F,I,W,UP,B,N,SIM,C4,S101` + black@100 + mypy-strict); don't restate it in prose (drift). Fleet philosophy → the hub `patterns/style/*.yaml`. Dev flow + commit/issue conventions → `CONTRIBUTING.md`. Repo-specific **non-enforceable** rules:
+- Seams = `@runtime_checkable Protocol`; results = `@dataclass(frozen=True, slots=True)` (`RunResult`/`Score`/`Worktree`); stdlib exceptions only.
+- **numpydoc** docstrings for graders/runner/stats (Parameters/Returns/Raises); plain prose for CLI/orchestration.
+- `status` taxonomy `ok|rate_limited|infra_error|timeout|parse_fail` — infra/throttle is never counted as model quality.
+- Ledger rows keyed by `grader_version` (re-grade without re-running); `reset_clean` operates only on linked worktrees (`.git` is a file).
+- Coverage tiers: graders/stats 90%+, runner/worktree 80%+, CLI best-effort.
+
 ## Current phase: EXPLORATION → DEVELOPMENT
 
 **Hybrid rigor (decided):** correctness-critical code is Development-grade *from day 1*; orchestration is Exploration-loose until the loop is proven.

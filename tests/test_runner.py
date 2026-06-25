@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from claude_ablation_lab.runner import (
     AUTH_ENV_STRIP,
     ClaudeCodeRunner,
     classify_status,
+    extract_json,
     result_from_payload,
 )
 
@@ -84,3 +86,116 @@ def test_env_strips_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     env = ClaudeCodeRunner()._env()
     for key in AUTH_ENV_STRIP:
         assert key not in env
+
+
+# --- Phase 1.5: extract_json robustness -------------------------------------
+
+
+@pytest.mark.unit
+def test_extract_json_clean() -> None:
+    assert extract_json('{"a": 1}') == {"a": 1}
+
+
+@pytest.mark.unit
+def test_extract_json_with_preamble() -> None:
+    text = "⚠ claude.ai connectors disabled\n" + '{"result": "ok", "is_error": false}'
+    assert extract_json(text) == {"result": "ok", "is_error": False}
+
+
+@pytest.mark.unit
+def test_extract_json_trailing_after_json() -> None:
+    parsed = extract_json('{"x": 1}\n[done]')
+    assert parsed is not None
+    assert parsed["x"] == 1
+
+
+@pytest.mark.unit
+def test_extract_json_garbage_returns_none() -> None:
+    assert extract_json("not json at all") is None
+
+
+@pytest.mark.unit
+def test_returncode_override_ok_to_infra_error() -> None:
+    res = result_from_payload(
+        _load("claude_json_success.json"),
+        run_id="r",
+        latency_s=1.0,
+        transcript_path=None,
+        returncode=1,
+    )
+    assert res.status == "infra_error"  # nonzero exit + ok payload = suspect
+    assert res.returncode == 1
+
+
+# --- Phase 1.5: run() envelope + status paths (monkeypatched subprocess) -----
+
+
+def _fake_proc(
+    stdout: str, returncode: int = 0, stderr: str = ""
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(
+        args=["claude"], returncode=returncode, stdout=stdout, stderr=stderr
+    )
+
+
+@pytest.mark.unit
+def test_run_preamble_stdout_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    success = (FIXTURES / "claude_json_success.json").read_text()
+    monkeypatch.setattr(
+        "claude_ablation_lab.runner.subprocess.run",
+        lambda *a, **k: _fake_proc("⚠ notice line\n" + success),
+    )
+    res = ClaudeCodeRunner(transcript_dir=tmp_path).run(
+        "hi", model="haiku", effort="low", cwd=tmp_path
+    )
+    assert res.status == "ok"
+    assert res.output == "ok"
+    assert res.returncode == 0
+    assert res.transcript_path is not None
+    envelope = json.loads(Path(res.transcript_path).read_text())
+    assert {"argv", "cwd", "returncode", "stdout", "stderr"} <= envelope.keys()
+
+
+@pytest.mark.unit
+def test_run_missing_binary_is_infra_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def boom(*a: object, **k: object) -> object:
+        raise FileNotFoundError("claude not found")
+
+    monkeypatch.setattr("claude_ablation_lab.runner.subprocess.run", boom)
+    res = ClaudeCodeRunner(transcript_dir=tmp_path).run(
+        "hi", model="haiku", effort="low", cwd=tmp_path
+    )
+    assert res.status == "infra_error"  # did not crash the sweep
+
+
+@pytest.mark.unit
+def test_run_timeout_captures_streams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def timeout(*a: object, **k: object) -> object:
+        raise subprocess.TimeoutExpired(
+            cmd=["claude"], timeout=1.0, output="partial out", stderr="err out"
+        )
+
+    monkeypatch.setattr("claude_ablation_lab.runner.subprocess.run", timeout)
+    res = ClaudeCodeRunner(transcript_dir=tmp_path).run(
+        "hi", model="haiku", effort="low", cwd=tmp_path
+    )
+    assert res.status == "timeout"
+    assert res.transcript_path is not None
+    envelope = json.loads(Path(res.transcript_path).read_text())
+    assert envelope["stdout"] == "partial out"
+    assert envelope["stderr"] == "err out"
+
+
+@pytest.mark.unit
+def test_run_nonzero_rate_limit_stays_rate_limited(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    limit = (FIXTURES / "claude_json_api_limit.json").read_text()
+    monkeypatch.setattr(
+        "claude_ablation_lab.runner.subprocess.run",
+        lambda *a, **k: _fake_proc(limit, returncode=1),
+    )
+    res = ClaudeCodeRunner(transcript_dir=tmp_path).run(
+        "hi", model="haiku", effort="low", cwd=tmp_path
+    )
+    assert res.status == "rate_limited"  # classification wins over the nonzero override
