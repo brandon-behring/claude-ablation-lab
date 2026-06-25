@@ -1,0 +1,2 @@
+# gitleaks allowlist — add `path:line:rule` fingerprints for confirmed false
+# positives (e.g. high-entropy task IDs or example tokens in fixtures). Empty by default.

@@ -1,0 +1,112 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "claude-ablation-lab"
+dynamic = ["version"]
+description = "Personal model × thinking-effort × config ablation/regression harness for Claude Code, run headless against your own use cases."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.13"
+authors = [{ name = "Brandon Behring" }]
+keywords = ["claude", "claude-code", "evaluation", "ablation", "thinking-effort", "regression-testing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
+]
+# NOTE: `eval-toolkit` is a hard dependency for the graders/stats but is NOT on
+# PyPI — it is installed editable from the local sibling repo by `make install`
+# (`pip install -e ~/Claude/eval-toolkit`). It is intentionally omitted here so
+# `pip install -e .` does not try (and fail) to resolve it from an index.
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+    "duckdb>=1.0",
+    "pandas>=2.0",
+    "pyarrow>=15.0",
+]
+
+[project.optional-dependencies]
+# Deferred ApiRunner adapter only — the v1 substrate is the `claude` CLI (subprocess).
+api = ["anthropic>=0.40"]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.5",
+    "black>=24.0",
+    "mypy>=1.10",
+    "pre-commit>=3.7",
+    "hypothesis>=6.100",
+]
+
+[project.urls]
+Repository = "https://github.com/brandon-behring/claude-ablation-lab"
+Issues = "https://github.com/brandon-behring/claude-ablation-lab/issues"
+
+[project.scripts]
+ablation = "claude_ablation_lab.cli.main:app"
+
+[tool.hatch.version]
+path = "src/claude_ablation_lab/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_ablation_lab"]
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501"]  # line length handled by black
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ARG001", "ARG002"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["claude_ablation_lab"]
+
+[tool.mypy]
+python_version = "3.13"
+mypy_path = "src"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# eval-toolkit ships py.typed but is installed out-of-tree; duckdb/pandas/yaml stubs vary.
+module = ["eval_toolkit.*", "duckdb.*", "pandas.*", "yaml.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+markers = [
+    "unit: Isolated logic tests (no subprocess, no network)",
+    "property: Hypothesis property-based invariant tests",
+    "smoke: End-to-end smoke tests (tiny real grid)",
+    "golden: Snapshot tests for deterministic outputs (graders, report aggregates)",
+    "slow: Tests > 2s. Opt out with `pytest -m 'not slow'`.",
+    "integration: Tests that shell out to the `claude` CLI or git. Opt in with `-m integration`.",
+]
+
+[tool.coverage.run]
+source = ["src/claude_ablation_lab"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:"]

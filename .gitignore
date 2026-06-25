@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Type-checker / linter caches
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Claude Code (keep shared config, drop local/secret)
+.claude/settings.local.json
+
+# --- harness data (results + gold are reproducible / large; not source) ---
+results/            # JSONL ledgers + results/transcripts/*.json
+data/               # copied/symlinked gold datasets
+.worktrees/         # scratch git worktrees materialized per (infra_repo, ref)
+*.duckdb

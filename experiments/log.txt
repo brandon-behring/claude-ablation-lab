@@ -1,0 +1,2 @@
+# One-line experiment log (ds_ml_lifecycle.md). Append `YYYY-MM-DD  <one line>`.
+2026-06-25  Phase 0 — repo scaffolded (canonical Python template; Exploration→Development).
