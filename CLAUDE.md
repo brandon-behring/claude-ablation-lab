@@ -81,4 +81,6 @@ Changes needed in `eval-toolkit` / `research_toolkit` → file a `consumer:claud
 
 ## Build phases
 
-0. Scaffold (this commit). 1. Runner + worktree + effort/model probe. 2. Task/Grader protocols + 3 graders (tested) + leakage gate. 3. Grid + JSONL ledger (resumable). 4. DuckDB report + compare. 5. `--estimate` → smoke → focused v1 sweep. 6 (deferred): API adapter, plotting, backlog tasks, book-content spinoff.
+0. ✅ Scaffold. 1. ✅ Runner + worktree. **1.5 (NEXT — harden the run cell): per-cell worktree isolation (`reset --hard && clean -fdx`), full subprocess envelope (argv/cwd/returncode/stdout/stderr + timeout `as e`), catch-all → `infra_error`, robust JSON, worktree validation/lock, cell-contract test.** 2. Graders (tested/90%) consuming stored transcripts, keyed by `grader_version` (run/grade decoupled) + leakage gate. 3. Grid + JSONL ledger (key incl. `grader_version`; provenance: claude version + global layer + MCP; orchestrator back-off). 4. DuckDB report/compare (CI over within-cell examples; epochs = run-variance; v1 exploratory). 5. `--estimate` (tokens+turns) → smoke → focused v1 sweep. 6 (deferred): API adapter, plotting, backlog, book spinoff.
+
+> Roadmap refined 2026-06-25 after a 2-voice independent review — see `docs/design/2026-06-25_independent-review.md`.
