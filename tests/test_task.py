@@ -85,7 +85,8 @@ def test_build_gold_and_prompt() -> None:
     assert set(gold) == set(range(10))
     assert set(gold.values()) <= {0, 1}
     prompt = t1.build_prompt(sub)
-    assert "[0]" in prompt and "[9]" in prompt
+    assert "<msg idx=0>" in prompt and "<msg idx=9>" in prompt  # delimited as data
+    assert "untrusted DATA" in prompt  # injection-hardening instruction
     assert "injection" in prompt  # the reused judge definition is embedded
 
 
@@ -94,6 +95,15 @@ def test_subsample_insufficient_class_raises() -> None:
     frame = pd.DataFrame({"text": ["a", "b"], "label": [1, 1]})  # no negatives
     with pytest.raises(ValueError, match="per class"):
         t1.subsample(frame, n=4, seed=1)
+
+
+@pytest.mark.unit
+def test_subsample_rejects_odd_or_nonpositive_n() -> None:
+    frame = _synthetic()
+    with pytest.raises(ValueError, match="even"):
+        t1.subsample(frame, n=61, seed=1)  # odd would silently return 60 rows
+    with pytest.raises(ValueError, match="even"):
+        t1.subsample(frame, n=0, seed=1)
 
 
 @pytest.mark.unit

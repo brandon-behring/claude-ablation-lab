@@ -86,6 +86,21 @@ def test_missing_validator_is_grader_error(tmp_path: Path) -> None:
     assert "not found" in score.details["reason"]
 
 
+@pytest.mark.unit
+def test_crash_without_summary_is_grader_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # exit 1 with a traceback but no "VALIDATION FAILED" summary = crash, not 0.8 credit.
+    grader, gold = _grader_with_stub_validator(tmp_path)
+    monkeypatch.setattr(
+        "claude_ablation_lab.graders.validator.subprocess.run",
+        lambda *a, **k: _completed(1, "Traceback (most recent call last):\n  RuntimeError\n"),
+    )
+    score = grader.grade(output="x", gold=gold)
+    assert score.status == "grader_error"
+    assert score.value == 0.0
+
+
 # --- integration: the real research_toolkit validator -------------------------
 
 
