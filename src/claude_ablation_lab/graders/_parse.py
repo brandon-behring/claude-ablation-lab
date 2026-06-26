@@ -14,45 +14,34 @@ dependency of this harness (upstream-friction discipline).
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from typing import Any
 
 __all__ = ["lenient_json", "parse_verdict"]
 
 
-def _slice(text: str, open_ch: str, close_ch: str) -> str | None:
-    """Return the first-``open_ch``…last-``close_ch`` slice, or ``None``."""
-    start, end = text.find(open_ch), text.rfind(close_ch)
-    return text[start : end + 1] if start != -1 and end > start else None
-
-
-def _candidates(text: str) -> Iterator[str]:
-    """Yield the whole text, then bracket slices, outermost structure first.
-
-    The outermost JSON is whichever bracket *opens* first — so a top-level array
-    ``[{…}]`` is recovered as the list, not the inner object it contains.
-    """
-    yield text
-    obj, arr = _slice(text, "{", "}"), _slice(text, "[", "]")
-    first_obj, first_arr = text.find("{"), text.find("[")
-    array_outermost = first_arr != -1 and (first_obj == -1 or first_arr < first_obj)
-    for candidate in (arr, obj) if array_outermost else (obj, arr):
-        if candidate is not None:
-            yield candidate
+_DECODER = json.JSONDecoder()
 
 
 def lenient_json(text: str) -> Any | None:
     """Best-effort parse of the JSON value embedded in ``text``.
 
-    Tries the whole string, then a first-``{``…last-``}`` object slice, then a
-    first-``[``…last-``]`` array slice. Returns the parsed value (dict or list)
-    or ``None`` if nothing parses.
+    Tries the whole string first, then ``raw_decode`` from each ``{``/``[`` start
+    (earliest first, so a top-level array ``[{…}]`` wins over the inner object it
+    contains). ``raw_decode`` stops at the end of the first valid value, so
+    trailing chatter (``{"a": 1} }``) no longer poisons an otherwise-valid object
+    — the failure mode of a first-open…last-close slice. Returns the parsed value
+    (dict/list/scalar) or ``None`` if nothing parses.
     """
-    for candidate in _candidates(text):
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    for start in sorted(i for i, ch in enumerate(text) if ch in "{["):
         try:
-            return json.loads(candidate)
+            value, _end = _DECODER.raw_decode(text, start)
         except (json.JSONDecodeError, ValueError):
             continue
+        return value
     return None
 
 

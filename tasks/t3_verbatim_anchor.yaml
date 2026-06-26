@@ -22,6 +22,7 @@ params:
     is why it is widely used for small-sample evaluation.
 gold:
   source_text: *source
+  expected_claims: 5  # denominator: under-producing claims is penalised (see AnchorGrader)
 prompt: |
   From the SOURCE below, extract exactly 5 factual claims. For each claim, provide
   an EXACT verbatim substring quote from the SOURCE that supports it — copy the

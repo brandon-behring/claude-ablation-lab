@@ -64,23 +64,26 @@ class ValidatorGrader:
 
         if proc.returncode == 0:
             return Score(1.0, subscores={"errors": 0.0}, details={"returncode": 0})
-        if proc.returncode == 2:
-            # Usage error = grader misuse (bad args / missing file), not a plan signal.
-            return Score(
-                0.0,
-                status="grader_error",
-                details={"returncode": 2, "stderr": proc.stderr[:1000]},
-            )
 
+        # Partial credit ONLY for a genuine schema failure: returncode 1 *and* the
+        # expected "VALIDATION FAILED" summary. A crash/traceback (exit 1 with no
+        # summary), a usage error (exit 2), or any other code is a grader failure,
+        # not low plan quality — never silently convert it into a ~0.8 score.
         n_errors = _count_errors(proc.stderr)
+        if proc.returncode == 1 and n_errors is not None:
+            return Score(
+                value=max(0.0, 1.0 - n_errors / ERROR_CAP),
+                subscores={"errors": float(n_errors)},
+                details={
+                    "returncode": 1,
+                    "errors": _error_lines(proc.stderr),
+                    "stderr": proc.stderr[:1000],
+                },
+            )
         return Score(
-            value=max(0.0, 1.0 - n_errors / ERROR_CAP),
-            subscores={"errors": float(n_errors)},
-            details={
-                "returncode": proc.returncode,
-                "errors": _error_lines(proc.stderr),
-                "stderr": proc.stderr[:1000],
-            },
+            0.0,
+            status="grader_error",
+            details={"returncode": proc.returncode, "stderr": proc.stderr[:1000]},
         )
 
 
@@ -99,12 +102,14 @@ def _run_validator(validator: Path, root: Path, content: str) -> subprocess.Comp
         )
 
 
-def _count_errors(stderr: str) -> int:
-    """Parse the ``VALIDATION FAILED: <n> error(s)`` count (≥1 on any failure)."""
+def _count_errors(stderr: str) -> int | None:
+    """Parse the ``VALIDATION FAILED: <n> error(s)`` count, or ``None`` if absent.
+
+    Absence means the validator never emitted its schema-failure summary (e.g. it
+    crashed) — the caller treats that as a grader error, not as zero errors.
+    """
     match = _ERROR_COUNT_RE.search(stderr)
-    if match:
-        return int(match.group(1))
-    return 1
+    return int(match.group(1)) if match else None
 
 
 def _error_lines(stderr: str) -> list[str]:

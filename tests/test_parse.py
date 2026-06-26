@@ -52,5 +52,11 @@ def test_lenient_json_outer_array_wins_over_inner_object() -> None:
 
 
 @pytest.mark.unit
+def test_lenient_json_trailing_brace_chatter() -> None:
+    # first-{…last-} slicing would over-capture the stray brace and fail; raw_decode stops early.
+    assert lenient_json('{"a": 1} }') == {"a": 1}
+
+
+@pytest.mark.unit
 def test_lenient_json_garbage_returns_none() -> None:
     assert lenient_json("no json here") is None
