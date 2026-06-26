@@ -225,6 +225,21 @@ def test_capture_ignores_artifact_older_than_run(tmp_path) -> None:
     assert out == "" and missing is True
 
 
+@pytest.mark.unit
+def test_capture_prefers_exact_path_over_newer_nested(tmp_path) -> None:
+    import os
+
+    (tmp_path / "plan.md").write_text("EXACT", encoding="utf-8")
+    (tmp_path / "sub").mkdir()
+    nested = tmp_path / "sub" / "plan.md"
+    nested.write_text("NESTED", encoding="utf-8")
+    later = time.time() + 100
+    os.utime(nested, (later, later))  # nested is strictly newer
+    prep = Prepared(prompt="p", artifact="plan.md")
+    out, missing = _capture_output(prep, _ok(run_id="r"), tmp_path, since=0.0)
+    assert out == "EXACT" and missing is False  # the requested path wins over a newer nested one
+
+
 # --- run_sweep --------------------------------------------------------------- #
 
 
@@ -273,9 +288,12 @@ def test_run_sweep_regrades_stored_output_on_version_bump(
     assert second.calls == 0  # re-graded from STORED output, no Claude call
     rows = load_rows(tmp_path / "ledger.jsonl")
     assert {r.grader_version for r in rows} == {"g1", "g2"}
-    # The re-grade row carries no model cost (P6 — naive SUM(cost) stays correct).
+    # The re-grade row PRESERVES the original run's cost (report dedupes to the
+    # latest grade per run_id, so a zeroed cost would make a paid run read as free).
+    original = next(r for r in rows if r.grader_version == "g1")
     regraded_row = next(r for r in rows if r.grader_version == "g2")
-    assert regraded_row.cost_usd == 0.0 and regraded_row.details.get("regrade_of")
+    assert regraded_row.cost_usd == original.cost_usd and regraded_row.cost_usd > 0
+    assert regraded_row.details.get("regrade_of") == regraded_row.run_id
 
 
 @pytest.mark.unit
@@ -365,6 +383,73 @@ def test_run_sweep_grader_exception_is_grader_error_not_crash(
 
 
 @pytest.mark.unit
+def test_run_sweep_regrades_a_grader_error_for_free_on_resume(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = {"raise": True}
+
+    class Flaky:  # same version across runs; grade is fixed between the two sweeps
+        version = "g1"
+
+        def grade(self, *, output, gold):  # noqa: ANN001, ANN204
+            if state["raise"]:
+                raise RuntimeError("transient grader bug")
+            return Score(1.0, subscores={}, details={})
+
+    monkeypatch.setattr(orchestrate, "get_grader", lambda _name: Flaky())
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+
+    first = FakeRunner(lambda n, **kw: _ok(run_id="r1"))
+    s1 = run_sweep([_anchor_task()], grid, runner=first, **_sweep_kwargs(tmp_path))
+    assert s1.ran == 1 and s1.grader_error == 1  # ran ok, grade failed
+
+    state["raise"] = False  # grader fixed (SAME version) → resume should re-grade for free
+    second = FakeRunner(lambda n, **kw: _ok(run_id="rNEW"))
+    s2 = run_sweep([_anchor_task()], grid, runner=second, **_sweep_kwargs(tmp_path))
+    assert second.calls == 0  # NOT re-run — no Claude call, no money burned
+    assert s2.regraded == 1 and s2.graded_ok == 1
+    latest = load_rows(tmp_path / "ledger.jsonl")[-1]
+    assert latest.grade_status == "ok" and latest.value == 1.0
+
+
+@pytest.mark.unit
+def test_run_sweep_clears_neutral_dir_between_cells(tmp_path) -> None:
+    grid = Grid(("haiku", "sonnet"), ("low",), ("none",), 1)  # 2 none-variant cells
+    leftover_seen: list[bool] = []
+
+    def responder(*, cwd: Path, n: int, **_kw: Any) -> RunResult:
+        leftover_seen.append((cwd / "leak.txt").exists())  # leaked from a prior cell?
+        (cwd / "leak.txt").write_text("x", encoding="utf-8")
+        return _ok(run_id=f"r{n}")
+
+    run_sweep([_anchor_task()], grid, runner=FakeRunner(responder), **_sweep_kwargs(tmp_path))
+    assert leftover_seen == [False, False]  # the neutral cwd is wiped between none cells
+
+
+@pytest.mark.unit
+def test_regrade_total_counts_only_selected_suite(tmp_path) -> None:
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    t3 = _anchor_task()
+    t_other = Task(
+        id="t_other",
+        domain="extraction",
+        grader="anchor",
+        mode="single",
+        prompt="x",
+        gold={"source_text": _SOURCE, "expected_claims": 1},
+    )
+    run_sweep(
+        [t3, t_other],
+        grid,
+        runner=FakeRunner(lambda n, **kw: _ok(run_id=f"r{n}")),
+        **_sweep_kwargs(tmp_path),
+    )
+    # Re-grading only t3 must report total=1 (t_other rows are out of scope), not 2.
+    summary = regrade_ledger([t3], ledger_path=tmp_path / "ledger.jsonl", now=lambda: "T2")
+    assert summary.total == 1
+
+
+@pytest.mark.unit
 def test_run_sweep_rejects_duplicate_task_ids(tmp_path) -> None:
     grid = Grid(("haiku",), ("low",), ("none",), 1)
     runner = FakeRunner(lambda n, **kw: _ok(run_id="r"))
@@ -373,7 +458,7 @@ def test_run_sweep_rejects_duplicate_task_ids(tmp_path) -> None:
 
 
 @pytest.mark.unit
-def test_regrade_row_carries_artifact_missing_and_zeros_cost() -> None:
+def test_regrade_row_preserves_run_metadata_and_carries_artifact_missing() -> None:
     prior = LedgerRow(
         task_id="t2",
         model="haiku",
@@ -399,7 +484,7 @@ def test_regrade_row_carries_artifact_missing_and_zeros_cost() -> None:
     assert row.grader_version == "g2"
     assert row.details["artifact_missing"] is True  # run-level marker carried forward
     assert row.details["regrade_of"] == "run-abc"  # audit trail to the original run
-    assert row.cost_usd == 0.0 and row.latency_s == 0.0  # no model cost on a re-grade
+    assert row.cost_usd == 0.5 and row.latency_s == 3.0  # original run cost preserved
     assert score.status == "ok"
 
 

@@ -154,6 +154,11 @@ def run_with_backoff(
     A hard usage limit halts immediately (retrying cannot help before the reset
     date). A transient ``rate_limited`` backs off and retries up to ``max_retries``;
     if it never clears, that too becomes a halt (the sweep is resumable later).
+
+    v1 limitation: retries reuse the same ``cwd`` without a reset between attempts,
+    so an agentic task that writes a partial artifact and is then throttled leaves
+    it for the retry. In practice a successful retry overwrites the artifact; the
+    pathological case (retry succeeds without rewriting) would capture the partial.
     """
     for attempt in range(max_retries + 1):
         run_result = runner.run(
@@ -207,15 +212,34 @@ def _capture_output(
     """
     if run_result.status != "ok" or prepared.artifact is None:
         return run_result.output, False
+    # Prefer the EXACT requested path when it was written during this run; only then
+    # fall back to a same-basename match elsewhere (the skill may nest it) — so a
+    # stray nested file can never override the path the task actually asked for.
+    direct = cwd / prepared.artifact
+    if _modified_since(direct, since):
+        text = _read_text(direct)
+        if text is not None:
+            return text, False
     name = Path(prepared.artifact).name
-    candidates = [cwd / prepared.artifact, *cwd.glob(f"**/{name}")]
-    fresh = [p for p in candidates if _modified_since(p, since)]
-    for path in sorted(fresh, key=lambda p: p.stat().st_mtime, reverse=True):
-        try:
-            return path.read_text(encoding="utf-8"), False
-        except (OSError, UnicodeError) as exc:
-            logger.warning("artifact %s unreadable: %s", path, exc)
+    nested = sorted(
+        (p for p in cwd.glob(f"**/{name}") if p != direct and _modified_since(p, since)),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
+    for path in nested:
+        text = _read_text(path)
+        if text is not None:
+            return text, False
     return "", True
+
+
+def _read_text(path: Path) -> str | None:
+    """Read a file as UTF-8, or ``None`` (logged) if it is unreadable/non-text."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        logger.warning("artifact %s unreadable: %s", path, exc)
+        return None
 
 
 def _modified_since(path: Path, since: float) -> bool:
@@ -347,12 +371,13 @@ def _resolve_tasks(
 def _regrade_row(
     prior: LedgerRow, grader: Grader, output: str, gold: object, ts: str
 ) -> tuple[LedgerRow, Score]:
-    """Re-score a stored run's ``output`` with ``grader``; cost/latency zeroed.
+    """Re-score a stored run's ``output`` with ``grader``, preserving run metadata.
 
-    The re-grade incurs no model cost, so ``cost_usd``/``latency_s`` are zeroed
-    (a naive ``SUM(cost_usd)`` over the ledger then stays correct); ``run_id`` and
-    a ``regrade_of`` marker are kept for audit. A run-level ``artifact_missing``
-    marker is carried forward (the new grade details would otherwise drop it).
+    The original run's ``cost_usd``/``latency_s``/``run_id`` are kept (the re-grade
+    is the *same* run, re-scored — analysis dedupes to the latest grade per
+    ``run_id``, so the cost must travel with it or a paid run would read as free).
+    A run-level ``artifact_missing`` marker is carried forward (the new grade
+    details would otherwise drop it); ``regrade_of`` records the lineage.
     """
     score = _safe_grade(grader, output, gold)
     details: dict[str, object] = dict(score.details)
@@ -366,8 +391,6 @@ def _regrade_row(
         value=score.value,
         subscores=dict(score.subscores),
         details=details,
-        cost_usd=0.0,
-        latency_s=0.0,
         ts=ts,
     )
     return row, score
@@ -443,9 +466,16 @@ def run_sweep(
             run_key: RunKey = (cell.task_id, cell.model, cell.effort, cell.variant, cell.epoch)
             ledger_key = (*run_key, grader.version)
 
-            # Path 1: already graded at this exact (spec, grader_version) → skip.
+            # Path 1: already settled at this exact (spec, grader_version) → skip.
+            # "Settled" = a definitive grade (ok or unparseable); a grader_error is
+            # NOT settled — it falls through to Path 2 to re-grade the stored output
+            # for free (a fixed grader re-scores without re-calling Claude).
             done_row = ok_ledger.get(ledger_key)
-            if done_row is not None and done_row.spec_sha == prep.spec_sha:
+            if (
+                done_row is not None
+                and done_row.spec_sha == prep.spec_sha
+                and done_row.grade_status != "grader_error"
+            ):
                 tally.skipped += 1
                 continue
 
@@ -475,7 +505,10 @@ def run_sweep(
                 tally.failed += 1
                 continue
 
-            before = time.time()  # only files written after this count as the artifact
+            # A sentinel written into the (pristine) cwd is the artifact-freshness
+            # baseline: comparing two same-filesystem mtimes is robust to coarse
+            # mtime resolution, unlike a float time.time() vs a floored st_mtime.
+            since = _sentinel_mtime(cwd)
             try:
                 run_result = run_with_backoff(
                     runner,
@@ -492,7 +525,7 @@ def run_sweep(
                 logger.error("sweep halted: %s", halt_reason)
                 break
 
-            output, artifact_missing = _capture_output(prep, run_result, cwd, since=before)
+            output, artifact_missing = _capture_output(prep, run_result, cwd, since=since)
             output_path = (
                 _persist_output(out_dir, run_result.run_id, output)
                 if run_result.status == "ok"
@@ -564,14 +597,17 @@ def _resolve_cwd(
     worktree_base: Path,
     neutral_dir: Path | None,
 ) -> tuple[Path, str | None, str | None, Path | None]:
-    """Resolve a cell's cwd. ``none`` → a neutral dir; else a reset worktree.
+    """Resolve a cell's **pristine** cwd. ``none`` → a cleared neutral dir; else a reset worktree.
 
     Returns ``(cwd, infra_repo, infra_sha, neutral_dir)`` — ``neutral_dir`` is
-    threaded back so it is created at most once and reused across ``none`` cells.
+    threaded back so the dir is created once and *reused* across ``none`` cells, but
+    its contents are wiped before each cell so one cell's writes never leak into the
+    next (the same per-cell isolation a worktree gets from ``reset_clean``).
     """
     if variant == NONE_VARIANT:
         if neutral_dir is None:
             neutral_dir = Path(tempfile.mkdtemp(prefix="ablation-neutral-"))
+        _clear_dir(neutral_dir)
         return neutral_dir, None, None, neutral_dir
     repo, ref = parse_variant(variant)  # type: ignore[misc]  # not None for non-'none'
     worktree = worktrees.get(variant)
@@ -580,6 +616,25 @@ def _resolve_cwd(
         worktrees[variant] = worktree
     wt_mod.reset_clean(worktree)  # pristine before this cell
     return worktree.path, str(worktree.repo), worktree.sha, neutral_dir
+
+
+def _clear_dir(path: Path) -> None:
+    """Empty a directory's contents (create it if missing); leaves the dir itself."""
+    import shutil
+
+    path.mkdir(parents=True, exist_ok=True)
+    for child in path.iterdir():
+        if child.is_dir() and not child.is_symlink():
+            shutil.rmtree(child, ignore_errors=True)
+        else:
+            child.unlink(missing_ok=True)
+
+
+def _sentinel_mtime(cwd: Path) -> float:
+    """Write a marker into ``cwd`` and return its mtime (the run's freshness baseline)."""
+    marker = cwd / ".ablation_marker"
+    marker.write_text("", encoding="utf-8")
+    return marker.stat().st_mtime
 
 
 def _cleanup(worktrees: dict[str, wt_mod.Worktree], neutral_dir: Path | None) -> None:
@@ -617,14 +672,16 @@ def regrade_ledger(
     ok_rows = ok_row_by_run_key(rows)
     graders, prepared = _resolve_tasks(tasks)
 
+    # Only rows for tasks in this suite are in scope; others are left untouched and
+    # excluded from `total` so the summary matches the work actually considered.
+    selected = {rk: row for rk, row in ok_rows.items() if row.task_id in graders}
     tally = _Tally()
-    for run_key, prior in ok_rows.items():
-        grader = graders.get(prior.task_id)
-        prep = prepared.get(prior.task_id)
-        if grader is None or prep is None:
-            continue  # a task not in this suite — leave its rows untouched
-        if ok_ledger.get((*run_key, grader.version)) is not None:
-            tally.skipped += 1
+    for run_key, prior in selected.items():
+        grader = graders[prior.task_id]
+        prep = prepared[prior.task_id]
+        settled = ok_ledger.get((*run_key, grader.version))
+        if settled is not None and settled.grade_status != "grader_error":
+            tally.skipped += 1  # ok/unparseable at this version — re-grade can't change it
             continue
         output = _reusable_output(prior, prep.spec_sha)
         if output is None:  # missing output or a changed spec — cannot re-grade offline
@@ -636,7 +693,7 @@ def regrade_ledger(
         tally.regraded += 1
         tally.bump_grade(score.status)
     return SweepSummary(
-        total=len(ok_rows),
+        total=len(selected),
         ran=0,
         regraded=tally.regraded,
         skipped=tally.skipped,
