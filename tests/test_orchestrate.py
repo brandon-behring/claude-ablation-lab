@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,10 +15,11 @@ import pytest
 from claude_ablation_lab import orchestrate
 from claude_ablation_lab.grade import Score
 from claude_ablation_lab.grid import Cell, Grid
-from claude_ablation_lab.ledger import load_rows
+from claude_ablation_lab.ledger import LedgerRow, load_rows
 from claude_ablation_lab.orchestrate import (
     SweepHaltedError,
     _capture_output,
+    _regrade_row,
     regrade_ledger,
     run_sweep,
     run_with_backoff,
@@ -91,6 +93,16 @@ class FakeGrader:
 
     def grade(self, *, output: str, gold: Any) -> Score:
         return Score(value=1.0 if output else 0.0, subscores={"hit": 1.0}, details={})
+
+
+@dataclass
+class RaisingGrader:
+    """A buggy grader that raises — must become grader_error, not crash the sweep."""
+
+    version: str = "raise-v1"
+
+    def grade(self, *, output: str, gold: Any) -> Score:
+        raise RuntimeError("boom in grader")
 
 
 @pytest.fixture(autouse=True)
@@ -203,6 +215,15 @@ def test_capture_missing_artifact_flags_quality_failure(tmp_path) -> None:
     assert out == "" and missing is True
 
 
+@pytest.mark.unit
+def test_capture_ignores_artifact_older_than_run(tmp_path) -> None:
+    # A file restored by reset_clean (older than the run) must NOT be read as output.
+    (tmp_path / "plan.md").write_text("PRE-EXISTING (committed)", encoding="utf-8")
+    prep = Prepared(prompt="p", artifact="plan.md")
+    out, missing = _capture_output(prep, _ok(run_id="r"), tmp_path, since=time.time() + 10)
+    assert out == "" and missing is True
+
+
 # --- run_sweep --------------------------------------------------------------- #
 
 
@@ -212,10 +233,12 @@ def test_run_sweep_happy_path_writes_graded_rows(tmp_path) -> None:
     grid = Grid(("haiku", "sonnet"), ("low",), ("none",), 1)
     summary = run_sweep([_anchor_task()], grid, runner=runner, **_sweep_kwargs(tmp_path))
     assert (summary.total, summary.ran, summary.failed) == (2, 2, 0)
+    assert summary.graded_ok == 2  # grade-status breakdown surfaced
     rows = load_rows(tmp_path / "ledger.jsonl")
     assert len(rows) == 2
     assert all(r.run_status == "ok" and r.value == 1.0 for r in rows)
     assert all(r.claude_version == "2.1.193" for r in rows)  # provenance stamped
+    assert all(r.spec_sha for r in rows)  # spec fingerprint stamped
     # The gradeable output was persisted (enables re-grade).
     assert all(r.output_path and Path(r.output_path).is_file() for r in rows)
 
@@ -247,8 +270,11 @@ def test_run_sweep_regrades_stored_output_on_version_bump(
     summary = run_sweep([_anchor_task()], grid, runner=second, **_sweep_kwargs(tmp_path))
     assert summary.regraded == 1 and summary.ran == 0
     assert second.calls == 0  # re-graded from STORED output, no Claude call
-    versions = {r.grader_version for r in load_rows(tmp_path / "ledger.jsonl")}
-    assert versions == {"g1", "g2"}
+    rows = load_rows(tmp_path / "ledger.jsonl")
+    assert {r.grader_version for r in rows} == {"g1", "g2"}
+    # The re-grade row carries no model cost (P6 — naive SUM(cost) stays correct).
+    regraded_row = next(r for r in rows if r.grader_version == "g2")
+    assert regraded_row.cost_usd == 0.0 and regraded_row.details.get("regrade_of")
 
 
 @pytest.mark.unit
@@ -298,6 +324,82 @@ def test_regrade_ledger_appends_new_version_rows(tmp_path, monkeypatch: pytest.M
         [_anchor_task()], ledger_path=tmp_path / "ledger.jsonl", now=lambda: "T3"
     )
     assert again.regraded == 0 and again.skipped >= 1
+
+
+@pytest.mark.unit
+def test_run_sweep_reruns_when_task_spec_changes(tmp_path) -> None:
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    first = FakeRunner(lambda n, **kw: _ok(run_id=f"r{n}"))
+    run_sweep([_anchor_task()], grid, runner=first, **_sweep_kwargs(tmp_path))
+    # Same task id, DIFFERENT gold → new spec_sha → must re-run, never stale-skip.
+    changed = Task(
+        id="t3",
+        domain="extraction",
+        grader="anchor",
+        mode="single",
+        prompt="x",
+        gold={"source_text": "an entirely different source", "expected_claims": 1},
+    )
+    second = FakeRunner(lambda n, **kw: _ok(run_id=f"x{n}"))
+    summary = run_sweep([changed], grid, runner=second, **_sweep_kwargs(tmp_path))
+    assert summary.ran == 1 and summary.skipped == 0  # re-ran, not silently skipped
+    assert second.calls == 1
+    assert len({r.spec_sha for r in load_rows(tmp_path / "ledger.jsonl")}) == 2
+
+
+@pytest.mark.unit
+def test_run_sweep_grader_exception_is_grader_error_not_crash(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(orchestrate, "get_grader", lambda _name: RaisingGrader())
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    runner = FakeRunner(lambda n, **kw: _ok(run_id=f"r{n}"))
+    summary = run_sweep([_anchor_task()], grid, runner=runner, **_sweep_kwargs(tmp_path))
+    assert summary.ran == 1 and summary.grader_error == 1  # sweep survived
+    [row] = load_rows(tmp_path / "ledger.jsonl")
+    assert row.run_status == "ok"  # the paid run is preserved, not lost to the crash
+    assert row.grade_status == "grader_error"
+    assert "grader_exception" in row.details
+    assert row.output_path and Path(row.output_path).is_file()  # re-gradable later
+
+
+@pytest.mark.unit
+def test_run_sweep_rejects_duplicate_task_ids(tmp_path) -> None:
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    runner = FakeRunner(lambda n, **kw: _ok(run_id="r"))
+    with pytest.raises(ValueError, match="duplicate task ids"):
+        run_sweep([_anchor_task(), _anchor_task()], grid, runner=runner, **_sweep_kwargs(tmp_path))
+
+
+@pytest.mark.unit
+def test_regrade_row_carries_artifact_missing_and_zeros_cost() -> None:
+    prior = LedgerRow(
+        task_id="t2",
+        model="haiku",
+        effort="low",
+        variant="r@HEAD",
+        epoch=0,
+        grader_version="g1",
+        run_id="run-abc",
+        run_status="ok",
+        cost_usd=0.5,
+        latency_s=3.0,
+        returncode=0,
+        model_resolved="m",
+        num_turns=2,
+        session_id="s",
+        grade_status="ok",
+        value=0.0,
+        spec_sha="S",
+        details={"artifact_missing": True},
+        output_path="x",
+    )
+    row, score = _regrade_row(prior, FakeGrader("g2"), "fresh output", {}, "T2")
+    assert row.grader_version == "g2"
+    assert row.details["artifact_missing"] is True  # run-level marker carried forward
+    assert row.details["regrade_of"] == "run-abc"  # audit trail to the original run
+    assert row.cost_usd == 0.0 and row.latency_s == 0.0  # no model cost on a re-grade
+    assert score.status == "ok"
 
 
 # --- integration: real worktree isolation ----------------------------------- #

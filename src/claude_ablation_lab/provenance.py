@@ -114,10 +114,16 @@ def _global_layer_digest(home: Path) -> str | None:
     found = False
     for name in _GLOBAL_LAYER_FILES:
         path = base / name
-        if path.is_file():
-            found = True
-            hasher.update(name.encode())
-            hasher.update(path.read_bytes())
+        if not path.is_file():
+            continue
+        try:
+            data = path.read_bytes()
+        except OSError as exc:  # unreadable (perms/symlink) — honor "never abort a sweep"
+            logger.debug("global-layer file %s unreadable: %s", path, exc)
+            continue
+        found = True
+        hasher.update(name.encode())
+        hasher.update(data)
     return hasher.hexdigest()[:12] if found else None
 
 

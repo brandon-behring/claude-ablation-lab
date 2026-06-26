@@ -9,8 +9,8 @@ import pytest
 from claude_ablation_lab.ledger import (
     LedgerRow,
     append_row,
-    completed_ledger_keys,
     load_rows,
+    ok_row_by_ledger_key,
     ok_row_by_run_key,
 )
 
@@ -83,11 +83,23 @@ def test_load_rows_skips_blank_and_truncated_lines(tmp_path) -> None:
 
 
 @pytest.mark.unit
-def test_completed_keys_only_counts_ok_runs() -> None:
+def test_ok_row_by_ledger_key_only_counts_ok_runs() -> None:
     rows = [_row(run_id="a"), _row(run_id="b", epoch=1, run_status="infra_error")]
-    done = completed_ledger_keys(rows)
+    done = ok_row_by_ledger_key(rows)
     assert ("t1", "haiku", "low", "none", 0, "v1") in done
     assert ("t1", "haiku", "low", "none", 1, "v1") not in done  # infra_error not done
+
+
+@pytest.mark.unit
+def test_load_rows_raises_on_midfile_corruption(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    append_row(path, _row(run_id="a"))
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write("{ not json }\n")  # a corrupt line that is NOT the last write
+    append_row(path, _row(run_id="c", epoch=2))
+    # Silently dropping a middle row would re-run a paid cell → must fail loudly.
+    with pytest.raises(ValueError, match="corrupt ledger line"):
+        load_rows(path)
 
 
 @pytest.mark.unit

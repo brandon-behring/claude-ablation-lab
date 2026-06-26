@@ -72,3 +72,22 @@ def test_prepare_unknown_grader_raises() -> None:
     task = Task(id="x", domain="d", grader="mystery", mode="single")
     with pytest.raises(ValueError, match="no preparer"):
         prepare_task(task)
+
+
+@pytest.mark.unit
+def test_spec_sha_is_stable_and_changes_with_gold() -> None:
+    def anchor(quote_gold: str) -> Task:
+        return Task(
+            id="t3",
+            domain="extraction",
+            grader="anchor",
+            mode="single",
+            prompt="extract",
+            gold={"source_text": quote_gold, "expected_claims": 5},
+        )
+
+    same_a = prepare_task(anchor("abc")).spec_sha
+    same_b = prepare_task(anchor("abc")).spec_sha
+    different = prepare_task(anchor("xyz")).spec_sha
+    assert same_a and same_a == same_b  # deterministic for identical spec
+    assert same_a != different  # a gold change changes the fingerprint

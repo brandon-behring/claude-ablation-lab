@@ -37,8 +37,8 @@ from claude_ablation_lab.ledger import (
     LedgerRow,
     RunKey,
     append_row,
-    completed_ledger_keys,
     load_rows,
+    ok_row_by_ledger_key,
     ok_row_by_run_key,
 )
 from claude_ablation_lab.prepare import Prepared, prepare_task
@@ -64,13 +64,22 @@ class SweepHaltedError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class SweepSummary:
-    """Counts of how each cell was handled (``total`` = expanded valid cells)."""
+    """Counts of how each cell was handled (``total`` = expanded valid cells).
+
+    ``ran``/``regraded``/``skipped``/``failed`` partition by *disposition*;
+    ``graded_ok``/``unparseable``/``grader_error`` partition the rows that were
+    *graded* (run or re-grade) by grade status — so an all-``grader_error`` sweep
+    (e.g. a missing validator) cannot look identical to a perfect one.
+    """
 
     total: int
     ran: int
     regraded: int
     skipped: int
     failed: int
+    graded_ok: int = 0
+    unparseable: int = 0
+    grader_error: int = 0
     halted: bool = False
     halt_reason: str | None = None
 
@@ -79,9 +88,16 @@ class SweepSummary:
 # Rate-limit handling
 # --------------------------------------------------------------------------- #
 def _is_hard_limit(run_result: RunResult) -> bool:
-    """True for the dated account usage cap (vs a transient, retryable throttle)."""
-    message = (run_result.output or "").lower()
-    return "usage limit" in message and "regain access" in message
+    """True for the account *usage* cap (vs a transient ``rate limit`` / overload).
+
+    The runner classifies both the dated usage cap and a transient 429 as
+    ``rate_limited``; here we separate them. ``"usage limit"`` is the account cap
+    phrase (retrying before the reset date cannot help → halt). A transient
+    throttle (``"rate limit"`` / ``"overloaded"``) lacks it and is retried. Even
+    if a reworded cap slips past, ``run_with_backoff`` still halts after
+    ``max_retries`` — this only avoids burning those retries.
+    """
+    return "usage limit" in (run_result.output or "").lower()
 
 
 def _backoff_seconds(attempt: int, base_s: float) -> float:
@@ -140,32 +156,61 @@ def _cell_label(cell: Cell) -> str:
 # --------------------------------------------------------------------------- #
 # Output capture + grading
 # --------------------------------------------------------------------------- #
-def _capture_output(prepared: Prepared, run_result: RunResult, cwd: Path) -> tuple[str, bool]:
+def _capture_output(
+    prepared: Prepared, run_result: RunResult, cwd: Path, *, since: float = 0.0
+) -> tuple[str, bool]:
     """Return ``(gradeable_output, artifact_missing)``.
 
     Single-turn tasks grade stdout. An agentic task grades the file it was meant to
     produce (``prepared.artifact``): preferred at ``cwd/<artifact>``, else the most
-    recently modified match anywhere under ``cwd`` (the skill may nest it). A
-    successful run that produced no artifact yields ``("", True)`` — a *quality*
-    failure (the task was not completed), graded honestly, not an infra error.
+    recently modified match anywhere under ``cwd`` (the skill may nest it). Only
+    files **written/modified during this run** (``mtime >= since``) qualify — so a
+    committed file of the same name, restored by ``reset_clean`` just before the
+    run, is not mistaken for the model's output (which would silently turn a
+    quality-0 into a high score). A successful run that produced no qualifying
+    artifact yields ``("", True)`` — an honest quality failure, not an infra error.
+    An unreadable artifact is likewise treated as missing rather than crashing.
     """
     if run_result.status != "ok" or prepared.artifact is None:
         return run_result.output, False
-    direct = cwd / prepared.artifact
-    if direct.is_file():
-        return direct.read_text(encoding="utf-8"), False
     name = Path(prepared.artifact).name
-    matches = sorted(cwd.glob(f"**/{name}"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if matches:
-        return matches[0].read_text(encoding="utf-8"), False
+    candidates = [cwd / prepared.artifact, *cwd.glob(f"**/{name}")]
+    fresh = [p for p in candidates if _modified_since(p, since)]
+    for path in sorted(fresh, key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            return path.read_text(encoding="utf-8"), False
+        except (OSError, UnicodeError) as exc:
+            logger.warning("artifact %s unreadable: %s", path, exc)
     return "", True
+
+
+def _modified_since(path: Path, since: float) -> bool:
+    """True iff ``path`` is a file whose mtime is at/after ``since`` (best-effort)."""
+    try:
+        return path.is_file() and path.stat().st_mtime >= since
+    except OSError:
+        return False
+
+
+def _safe_grade(grader: Grader, output: str, gold: object) -> Score:
+    """Call ``grader.grade`` but turn any exception into ``grader_error``.
+
+    "A buggy grader poisons every number" (CLAUDE.md #4): a grader that raises
+    (bad gold value, numpy/eval_toolkit edge) must not crash the sweep and lose an
+    already-paid run — it is recorded as a grader failure, re-gradable later.
+    """
+    try:
+        return grader.grade(output=output, gold=gold)  # type: ignore[arg-type]
+    except Exception as exc:  # noqa: BLE001 — deliberate: isolate grader faults
+        logger.exception("grader %r raised", getattr(grader, "version", "?"))
+        return Score(0.0, status="grader_error", details={"grader_exception": repr(exc)})
 
 
 def _grade(grader: Grader, run_status: str, output: str, gold: object) -> Score:
     """Grade an ``ok`` run's output; short-circuit a failed run to ``grader_error``."""
     if run_status != "ok":
         return Score(0.0, status="grader_error", details={"run_status": run_status})
-    return grader.grade(output=output, gold=gold)  # type: ignore[arg-type]
+    return _safe_grade(grader, output, gold)
 
 
 def _persist_output(outputs_dir: Path, run_id: str, output: str) -> str:
@@ -179,6 +224,7 @@ def _persist_output(outputs_dir: Path, run_id: str, output: str) -> str:
 def _build_row(
     cell: Cell,
     grader_version: str,
+    spec_sha: str,
     run_result: RunResult,
     score: Score,
     *,
@@ -210,6 +256,7 @@ def _build_row(
         session_id=run_result.session_id,
         grade_status=score.status,
         value=score.value,
+        spec_sha=spec_sha,
         subscores=dict(score.subscores),
         details=details,
         output_path=output_path,
@@ -223,6 +270,73 @@ def _build_row(
         global_layer=provenance.global_layer,
         mcp_servers=provenance.mcp_servers,
     )
+
+
+@dataclass
+class _Tally:
+    """Mutable per-sweep counters (disposition + grade-status of graded rows)."""
+
+    ran: int = 0
+    regraded: int = 0
+    skipped: int = 0
+    failed: int = 0
+    graded_ok: int = 0
+    unparseable: int = 0
+    grader_error: int = 0
+
+    def bump_grade(self, status: str) -> None:
+        if status == "ok":
+            self.graded_ok += 1
+        elif status == "unparseable":
+            self.unparseable += 1
+        else:
+            self.grader_error += 1
+
+
+def _resolve_tasks(
+    tasks: Sequence[Task],
+) -> tuple[dict[str, Grader], dict[str, Prepared]]:
+    """Index graders + prepared cells by task id, rejecting duplicate ids.
+
+    Two tasks sharing an ``id`` would silently overwrite each other in these maps
+    and mis-grade every cell of the shadowed task — so it is a hard error.
+    """
+    ids = [task.id for task in tasks]
+    dups = sorted({tid for tid in ids if ids.count(tid) > 1})
+    if dups:
+        raise ValueError(f"duplicate task ids: {dups} — each task id must be unique")
+    graders = {task.id: get_grader(task.grader) for task in tasks}
+    prepared = {task.id: prepare_task(task) for task in tasks}
+    return graders, prepared
+
+
+def _regrade_row(
+    prior: LedgerRow, grader: Grader, output: str, gold: object, ts: str
+) -> tuple[LedgerRow, Score]:
+    """Re-score a stored run's ``output`` with ``grader``; cost/latency zeroed.
+
+    The re-grade incurs no model cost, so ``cost_usd``/``latency_s`` are zeroed
+    (a naive ``SUM(cost_usd)`` over the ledger then stays correct); ``run_id`` and
+    a ``regrade_of`` marker are kept for audit. A run-level ``artifact_missing``
+    marker is carried forward (the new grade details would otherwise drop it).
+    """
+    score = _safe_grade(grader, output, gold)
+    details: dict[str, object] = dict(score.details)
+    if prior.details.get("artifact_missing"):
+        details["artifact_missing"] = True
+    details["regrade_of"] = prior.run_id
+    row = replace(
+        prior,
+        grader_version=grader.version,
+        grade_status=score.status,
+        value=score.value,
+        subscores=dict(score.subscores),
+        details=details,
+        cost_usd=0.0,
+        latency_s=0.0,
+        ts=ts,
+    )
+    return row, score
 
 
 # --------------------------------------------------------------------------- #
@@ -273,12 +387,11 @@ def run_sweep(
     out_dir = Path(outputs_dir) if outputs_dir else ledger_path.parent / "outputs"
 
     cells = expand_grid(grid, list(tasks))
-    graders: dict[str, Grader] = {task.id: get_grader(task.grader) for task in tasks}
-    prepared: dict[str, Prepared] = {task.id: prepare_task(task) for task in tasks}
+    graders, prepared = _resolve_tasks(tasks)  # raises on duplicate task id
     provenance = gather_provenance(harness_repo=harness_repo)
 
     rows = load_rows(ledger_path)
-    done = completed_ledger_keys(rows)
+    ok_ledger = ok_row_by_ledger_key(rows)
     ok_rows = ok_row_by_run_key(rows)
 
     worktrees: dict[str, wt_mod.Worktree] = {}
@@ -286,7 +399,7 @@ def run_sweep(
     neutral_dir = Path(neutral_cwd) if neutral_cwd else None
     owns_neutral = neutral_cwd is None
 
-    ran = regraded = skipped = failed = 0
+    tally = _Tally()
     halted = False
     halt_reason: str | None = None
     try:
@@ -296,33 +409,27 @@ def run_sweep(
             run_key: RunKey = (cell.task_id, cell.model, cell.effort, cell.variant, cell.epoch)
             ledger_key = (*run_key, grader.version)
 
-            if ledger_key in done:
-                skipped += 1
+            # Path 1: already graded at this exact (spec, grader_version) → skip.
+            done_row = ok_ledger.get(ledger_key)
+            if done_row is not None and done_row.spec_sha == prep.spec_sha:
+                tally.skipped += 1
                 continue
 
-            # Path 2: re-grade a stored ok run at a new grader_version (no Claude call).
+            # Path 2: a stored ok run for the SAME spec → re-grade offline (no Claude).
             prior = ok_rows.get(run_key)
-            if prior is not None and prior.output_path and Path(prior.output_path).is_file():
-                output = Path(prior.output_path).read_text(encoding="utf-8")
-                score = grader.grade(output=output, gold=prep.gold)
-                row = replace(
-                    prior,
-                    grader_version=grader.version,
-                    grade_status=score.status,
-                    value=score.value,
-                    subscores=dict(score.subscores),
-                    details=dict(score.details),
-                    ts=timestamp(),
-                )
+            prior_output = _reusable_output(prior, prep.spec_sha)
+            if prior is not None and prior_output is not None:
+                row, score = _regrade_row(prior, grader, prior_output, prep.gold, timestamp())
                 append_row(ledger_path, row)
-                done.add(ledger_key)
+                ok_ledger[ledger_key] = row
                 ok_rows[run_key] = row
-                regraded += 1
+                tally.regraded += 1
+                tally.bump_grade(score.status)
                 continue
 
             # Path 3: a real run. Resolve cwd / worktree first.
             if cell.variant in bad_variants:
-                failed += 1
+                tally.failed += 1
                 continue
             try:
                 cwd, infra_repo, infra_sha, neutral_dir = _resolve_cwd(
@@ -331,9 +438,10 @@ def run_sweep(
             except (RuntimeError, ValueError, OSError) as exc:
                 logger.error("variant %s unusable, skipping its cells: %s", cell.variant, exc)
                 bad_variants.add(cell.variant)
-                failed += 1
+                tally.failed += 1
                 continue
 
+            before = time.time()  # only files written after this count as the artifact
             try:
                 run_result = run_with_backoff(
                     runner,
@@ -350,7 +458,7 @@ def run_sweep(
                 logger.error("sweep halted: %s", halt_reason)
                 break
 
-            output, artifact_missing = _capture_output(prep, run_result, cwd)
+            output, artifact_missing = _capture_output(prep, run_result, cwd, since=before)
             output_path = (
                 _persist_output(out_dir, run_result.run_id, output)
                 if run_result.status == "ok"
@@ -360,6 +468,7 @@ def run_sweep(
             row = _build_row(
                 cell,
                 grader.version,
+                prep.spec_sha,
                 run_result,
                 score,
                 output_path=output_path,
@@ -372,24 +481,47 @@ def run_sweep(
             )
             append_row(ledger_path, row)
             if run_result.status == "ok":
-                done.add(ledger_key)
+                ok_ledger[ledger_key] = row
                 ok_rows[run_key] = row
-                ran += 1
+                tally.ran += 1
+                tally.bump_grade(score.status)
             else:
-                failed += 1
+                tally.failed += 1
     finally:
         if cleanup:
             _cleanup(worktrees, neutral_dir if owns_neutral else None)
 
     return SweepSummary(
         total=len(cells),
-        ran=ran,
-        regraded=regraded,
-        skipped=skipped,
-        failed=failed,
+        ran=tally.ran,
+        regraded=tally.regraded,
+        skipped=tally.skipped,
+        failed=tally.failed,
+        graded_ok=tally.graded_ok,
+        unparseable=tally.unparseable,
+        grader_error=tally.grader_error,
         halted=halted,
         halt_reason=halt_reason,
     )
+
+
+def _reusable_output(prior: LedgerRow | None, spec_sha: str) -> str | None:
+    """Stored output to re-grade, iff ``prior`` matches ``spec_sha`` and its file exists.
+
+    Returns ``None`` (→ a fresh run) when there is no prior ok run, the spec
+    changed (prompt/schema/gold differ → the stored output is for a different
+    cell), or the output file is gone — never re-grades stale output.
+    """
+    if prior is None or prior.spec_sha != spec_sha or not prior.output_path:
+        return None
+    path = Path(prior.output_path)
+    if not path.is_file():
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        logger.warning("stored output %s unreadable: %s", path, exc)
+        return None
 
 
 def _resolve_cwd(
@@ -439,45 +571,43 @@ def regrade_ledger(
 
     The decoupling payoff: after fixing a grader and bumping its ``version``, this
     appends fresh rows for the new ``grader_version`` by reading each run's stored
-    output. Rows already at the current version are skipped; a run whose output
-    file is missing is counted as ``failed``.
+    output. Rows already at the current version are skipped; a run whose output is
+    missing — or whose stored ``spec_sha`` no longer matches the task's current
+    prompt/gold — is counted as ``failed`` (re-grading it would score stale output
+    against a changed spec; it needs a fresh run instead).
     """
     timestamp = now or (lambda: datetime.now(UTC).isoformat())
     ledger_path = Path(ledger_path)
     rows = load_rows(ledger_path)
-    done = completed_ledger_keys(rows)
+    ok_ledger = ok_row_by_ledger_key(rows)
     ok_rows = ok_row_by_run_key(rows)
-    graders: dict[str, Grader] = {task.id: get_grader(task.grader) for task in tasks}
-    prepared: dict[str, Prepared] = {task.id: prepare_task(task) for task in tasks}
+    graders, prepared = _resolve_tasks(tasks)
 
-    regraded = skipped = failed = 0
+    tally = _Tally()
     for run_key, prior in ok_rows.items():
         grader = graders.get(prior.task_id)
         prep = prepared.get(prior.task_id)
         if grader is None or prep is None:
-            failed += 1
+            continue  # a task not in this suite — leave its rows untouched
+        if ok_ledger.get((*run_key, grader.version)) is not None:
+            tally.skipped += 1
             continue
-        if (*run_key, grader.version) in done:
-            skipped += 1
+        output = _reusable_output(prior, prep.spec_sha)
+        if output is None:  # missing output or a changed spec — cannot re-grade offline
+            tally.failed += 1
             continue
-        if not prior.output_path or not Path(prior.output_path).is_file():
-            failed += 1
-            continue
-        output = Path(prior.output_path).read_text(encoding="utf-8")
-        score = grader.grade(output=output, gold=prep.gold)
-        append_row(
-            ledger_path,
-            replace(
-                prior,
-                grader_version=grader.version,
-                grade_status=score.status,
-                value=score.value,
-                subscores=dict(score.subscores),
-                details=dict(score.details),
-                ts=timestamp(),
-            ),
-        )
-        regraded += 1
+        row, score = _regrade_row(prior, grader, output, prep.gold, timestamp())
+        append_row(ledger_path, row)
+        ok_ledger[row.ledger_key] = row
+        tally.regraded += 1
+        tally.bump_grade(score.status)
     return SweepSummary(
-        total=len(ok_rows), ran=0, regraded=regraded, skipped=skipped, failed=failed
+        total=len(ok_rows),
+        ran=0,
+        regraded=tally.regraded,
+        skipped=tally.skipped,
+        failed=tally.failed,
+        graded_ok=tally.graded_ok,
+        unparseable=tally.unparseable,
+        grader_error=tally.grader_error,
     )

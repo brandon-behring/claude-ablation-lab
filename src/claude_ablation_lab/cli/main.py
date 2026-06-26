@@ -13,7 +13,7 @@ The v1 substrate is the `claude` CLI run headless; see CLAUDE.md.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 from rich.console import Console
@@ -22,6 +22,9 @@ from rich.table import Table
 from claude_ablation_lab._version import __version__
 from claude_ablation_lab.grid import expand_grid, load_grid
 from claude_ablation_lab.task import Task, load_all, load_task
+
+if TYPE_CHECKING:
+    from claude_ablation_lab.orchestrate import SweepSummary
 
 app = typer.Typer(
     name="ablation",
@@ -151,14 +154,29 @@ def _print_cells(cells: list) -> None:  # type: ignore[type-arg]
     console.print(table)
 
 
-def _print_summary(summary: object) -> None:
-    """Render a SweepSummary as a compact table."""
+def _print_summary(summary: SweepSummary) -> None:
+    """Render a SweepSummary as a compact table (+ a grade-status breakdown)."""
     table = Table(title="sweep summary")
-    fields = ("total", "ran", "regraded", "skipped", "failed")
+    fields = (
+        "total",
+        "ran",
+        "regraded",
+        "skipped",
+        "failed",
+        "graded_ok",
+        "unparseable",
+        "grader_error",
+    )
     for field_name in fields:
         table.add_column(field_name)
     table.add_row(*(str(getattr(summary, field_name)) for field_name in fields))
     console.print(table)
+    # A sweep can "succeed" (ran>0, failed=0) yet grade nothing useful — surface it.
+    if summary.grader_error or summary.unparseable:
+        console.print(
+            f"[yellow]note:[/yellow] {summary.grader_error} grader_error / "
+            f"{summary.unparseable} unparseable graded rows — inspect before trusting scores"
+        )
 
 
 def _fail(msg: str) -> int:

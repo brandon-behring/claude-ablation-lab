@@ -14,15 +14,23 @@ re-grade reproduces the identical gold without storing it.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from claude_ablation_lab.task import Task
 
-__all__ = ["Prepared", "prepare_task", "DEFAULT_ARTIFACT", "DEFAULT_AGENT_PERMISSION_MODE"]
+__all__ = [
+    "Prepared",
+    "prepare_task",
+    "spec_sha",
+    "DEFAULT_ARTIFACT",
+    "DEFAULT_AGENT_PERMISSION_MODE",
+]
 
 #: Where an agentic task is expected to write its artifact (overridable per task).
 DEFAULT_ARTIFACT = "research_plan.md"
@@ -32,13 +40,31 @@ DEFAULT_AGENT_PERMISSION_MODE = "acceptEdits"
 
 @dataclass(frozen=True, slots=True)
 class Prepared:
-    """A task made concrete for one run+grade cycle."""
+    """A task made concrete for one run+grade cycle.
+
+    ``spec_sha`` fingerprints the *gradeable identity* (prompt + json_schema +
+    gold). It is stamped on every ledger row and gates resume/re-grade: if a
+    task's prompt, schema, seed/subsample, or gold changes, the fingerprint
+    changes, so a stored run is never silently reused for — nor graded against —
+    a different spec (the Phase-3 analog of the run/grade honesty split).
+    """
 
     prompt: str
     gold: Mapping[str, Any] = field(default_factory=dict)
     json_schema: dict[str, Any] | None = None
     artifact: str | None = None
     permission_mode: str | None = None
+    spec_sha: str = ""
+
+
+def spec_sha(prompt: str, json_schema: dict[str, Any] | None, gold: Mapping[str, Any]) -> str:
+    """16-hex fingerprint of a cell's gradeable inputs (prompt + schema + gold)."""
+    blob = json.dumps(
+        {"prompt": prompt, "schema": json_schema, "gold": gold},
+        sort_keys=True,
+        default=str,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
 def _prepare_classification(task: Task) -> Prepared:
@@ -90,4 +116,5 @@ def prepare_task(task: Task) -> Prepared:
         raise ValueError(
             f"no preparer for grader {task.grader!r} (known: {', '.join(_PREPARERS)})"
         ) from None
-    return preparer(task)
+    prep = preparer(task)
+    return replace(prep, spec_sha=spec_sha(prep.prompt, prep.json_schema, prep.gold))

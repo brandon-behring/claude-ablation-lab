@@ -33,7 +33,7 @@ __all__ = [
     "LedgerKey",
     "append_row",
     "load_rows",
-    "completed_ledger_keys",
+    "ok_row_by_ledger_key",
     "ok_row_by_run_key",
 ]
 
@@ -69,6 +69,7 @@ class LedgerRow:
     # --- grade outcome ---
     grade_status: str
     value: float
+    spec_sha: str = ""  # fingerprint of (prompt, schema, gold) — gates resume/re-grade
     subscores: dict[str, float] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)
     # --- output + provenance ---
@@ -121,32 +122,49 @@ def append_row(path: Path | str, row: LedgerRow) -> None:
 
 
 def load_rows(path: Path | str) -> list[LedgerRow]:
-    """Read every row from a JSONL ledger (skips blank / unparseable lines).
+    """Read every row from a JSONL ledger; blank lines are ignored.
 
-    A crash mid-write can leave a truncated final line; it is skipped with a
-    warning rather than aborting a resume.
+    A crash mid-``append_row`` can leave a truncated **final** line — that one is
+    skipped with a warning so a resume can proceed. An unparseable line *anywhere
+    else* signals real corruption (or a hand-edit), and is raised as a
+    :class:`ValueError` rather than silently dropped: dropping a completed row
+    would silently re-run (re-pay for) that cell and hand Phase 4 an incomplete
+    dataset it would treat as authoritative.
     """
     path = Path(path)
     if not path.exists():
         return []
+    raw_lines = path.read_text(encoding="utf-8").splitlines()
+    last_idx = max((i for i, ln in enumerate(raw_lines) if ln.strip()), default=-1)
     rows: list[LedgerRow] = []
-    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for idx, line in enumerate(raw_lines):
         if not line.strip():
             continue
         try:
             rows.append(_row_from_jsonl_dict(json.loads(line)))
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            logger.warning("skipping unparseable ledger line %d in %s: %s", lineno, path, exc)
+            if idx == last_idx:  # benign: a crash truncated the final write
+                logger.warning("skipping truncated final ledger line %d in %s", idx + 1, path)
+                continue
+            raise ValueError(f"corrupt ledger line {idx + 1} in {path}: {exc}") from exc
     return rows
 
 
-def completed_ledger_keys(rows: list[LedgerRow]) -> set[LedgerKey]:
-    """Ledger keys of ``ok``-run rows — a cell here is fully done (skip entirely)."""
-    return {row.ledger_key for row in rows if row.run_status == "ok"}
+def ok_row_by_ledger_key(rows: list[LedgerRow]) -> dict[LedgerKey, LedgerRow]:
+    """Latest ``ok``-run row per *ledger* key (incl. ``grader_version``).
+
+    Used for the resume skip: a cell is fully done only if a stored row matches
+    the ledger key *and* the current ``spec_sha`` (checked by the caller).
+    """
+    out: dict[LedgerKey, LedgerRow] = {}
+    for row in rows:
+        if row.run_status == "ok":
+            out[row.ledger_key] = row
+    return out
 
 
 def ok_row_by_run_key(rows: list[LedgerRow]) -> dict[RunKey, LedgerRow]:
-    """Latest ``ok``-run row per run key — the basis for re-grading without re-running.
+    """Latest ``ok``-run row per *run* key — the basis for re-grading without re-running.
 
     Later rows win, so the most recent successful run is reused. The stored
     ``output_path`` on the returned row is what a re-grade reads.
