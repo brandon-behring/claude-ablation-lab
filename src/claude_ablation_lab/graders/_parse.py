@@ -5,10 +5,9 @@ its JSON (the grading analog of :func:`claude_ablation_lab.runner.extract_json`,
 but it also recovers a top-level *array*, which the dict-only runner helper does
 not).
 
-``parse_verdict`` is adapted verbatim from ``prompt_injection_detector``'s
-``src/pid/judge.py`` (``_parse_verdict``, the proven robust one-word parse). It
-is copied — not imported — because that repo is a separate project, not a
-dependency of this harness (upstream-friction discipline).
+``parse_verdict`` is a robust one-word verdict parse (injection/safe) for the
+batched classifier output — a small standalone helper, so the grader takes no
+dependency on any external detector project.
 """
 
 from __future__ import annotations
@@ -49,8 +48,7 @@ def parse_verdict(raw: str) -> tuple[int, bool]:
     """Map a free-text injection verdict to ``(label, parse_failed)``.
 
     ``label`` is ``1`` for *injection*, ``0`` for *safe*. ``parse_failed`` is
-    ``True`` when the response was ambiguous (defaults to ``0``). Adapted from
-    ``prompt_injection_detector`` ``src/pid/judge.py:_parse_verdict``.
+    ``True`` when the response was ambiguous (defaults to ``0``).
     """
     if not isinstance(raw, str):
         return 0, True
