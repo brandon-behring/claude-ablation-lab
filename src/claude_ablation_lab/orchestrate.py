@@ -46,7 +46,15 @@ from claude_ablation_lab.provenance import Provenance, gather_provenance
 from claude_ablation_lab.runner import Runner, RunResult
 from claude_ablation_lab.task import Task
 
-__all__ = ["SweepHaltedError", "SweepSummary", "run_sweep", "regrade_ledger", "run_with_backoff"]
+__all__ = [
+    "SweepHaltedError",
+    "SweepSummary",
+    "Estimate",
+    "run_sweep",
+    "regrade_ledger",
+    "estimate_sweep",
+    "run_with_backoff",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +68,32 @@ class SweepHaltedError(RuntimeError):
     The ledger is always left consistent and resumable — re-running the same
     command continues from the first unfinished cell.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class Estimate:
+    """Pre-flight projection of a sweep's usage from one calibrated cell.
+
+    Rate-limit headroom — not dollars — is the real budget, so the projection is
+    over **tokens and turns** (and wall-clock and cost). It is deliberately rough:
+    one calibration cell is extrapolated to every cell, so cost skews low if the
+    grid is mostly cheaper/pricier than the calibration model. ``calibration_status``
+    is the run status of that one cell; anything but ``ok`` makes the numbers moot.
+    """
+
+    n_cells: int
+    calibration_label: str
+    calibration_status: str
+    cell_cost_usd: float
+    cell_latency_s: float
+    cell_turns: int
+    cell_input_tokens: int
+    cell_output_tokens: int
+    projected_cost_usd: float
+    projected_wall_clock_s: float
+    projected_turns: int
+    projected_input_tokens: int
+    projected_output_tokens: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -610,4 +644,85 @@ def regrade_ledger(
         graded_ok=tally.graded_ok,
         unparseable=tally.unparseable,
         grader_error=tally.grader_error,
+    )
+
+
+def estimate_sweep(
+    tasks: Sequence[Task],
+    grid: Grid,
+    *,
+    runner: Runner,
+    worktree_base: Path = wt_mod.DEFAULT_BASE,
+    neutral_cwd: Path | str | None = None,
+    max_retries: int = 4,
+    backoff_base_s: float = 2.0,
+    sleep: Callable[[float], None] = time.sleep,
+    cleanup: bool = True,
+) -> Estimate:
+    """Run the first grid cell and project the whole sweep's usage from it.
+
+    A pre-flight check before committing rate-limit headroom to a full sweep: it
+    executes one real cell (no ledger write) and multiplies its tokens/turns/cost/
+    latency by the cell count. If that cell hits a hard cap, the projection is
+    returned with ``calibration_status="halted"`` and zeros rather than raising.
+    """
+    _, prepared = _resolve_tasks(tasks)
+    cells = expand_grid(grid, list(tasks))
+    if not cells:
+        raise ValueError("grid expands to 0 valid cells")
+    cell = cells[0]  # the first cell (v1 grids order the cheapest model/effort first)
+    prep = prepared[cell.task_id]
+
+    worktrees: dict[str, wt_mod.Worktree] = {}
+    neutral_dir = Path(neutral_cwd) if neutral_cwd else None
+    owns_neutral = neutral_cwd is None
+    try:
+        cwd, _, _, neutral_dir = _resolve_cwd(cell.variant, worktrees, worktree_base, neutral_dir)
+        try:
+            run_result = run_with_backoff(
+                runner, prep, cell, cwd, max_retries=max_retries, base_s=backoff_base_s, sleep=sleep
+            )
+        except SweepHaltedError:
+            return _zero_estimate(len(cells), _cell_label(cell))
+    finally:
+        if cleanup:
+            _cleanup(worktrees, neutral_dir if owns_neutral else None)
+
+    n = len(cells)
+    usage = run_result.usage or {}
+    in_tok = int(usage.get("input_tokens", 0) or 0)
+    out_tok = int(usage.get("output_tokens", 0) or 0)
+    return Estimate(
+        n_cells=n,
+        calibration_label=_cell_label(cell),
+        calibration_status=run_result.status,
+        cell_cost_usd=run_result.cost_usd,
+        cell_latency_s=run_result.latency_s,
+        cell_turns=run_result.num_turns,
+        cell_input_tokens=in_tok,
+        cell_output_tokens=out_tok,
+        projected_cost_usd=run_result.cost_usd * n,
+        projected_wall_clock_s=run_result.latency_s * n,
+        projected_turns=run_result.num_turns * n,
+        projected_input_tokens=in_tok * n,
+        projected_output_tokens=out_tok * n,
+    )
+
+
+def _zero_estimate(n_cells: int, label: str) -> Estimate:
+    """A halted-calibration estimate (the cap was hit before any number was measured)."""
+    return Estimate(
+        n_cells=n_cells,
+        calibration_label=label,
+        calibration_status="halted",
+        cell_cost_usd=0.0,
+        cell_latency_s=0.0,
+        cell_turns=0,
+        cell_input_tokens=0,
+        cell_output_tokens=0,
+        projected_cost_usd=0.0,
+        projected_wall_clock_s=0.0,
+        projected_turns=0,
+        projected_input_tokens=0,
+        projected_output_tokens=0,
     )

@@ -24,7 +24,7 @@ from claude_ablation_lab.grid import expand_grid, load_grid
 from claude_ablation_lab.task import Task, load_all, load_task
 
 if TYPE_CHECKING:
-    from claude_ablation_lab.orchestrate import SweepSummary
+    from claude_ablation_lab.orchestrate import Estimate, SweepSummary
 
 app = typer.Typer(
     name="ablation",
@@ -117,9 +117,24 @@ def regrade(
 def estimate(
     suite: Annotated[Path, typer.Argument(help="Task-suite dir or a single task YAML")],
     grid: Annotated[Path, typer.Argument(help="Grid spec YAML")],
+    task: Annotated[list[str] | None, typer.Option(help="Only consider these task ids")] = None,
+    timeout_s: Annotated[float, typer.Option(help="Per-cell wall-clock cap")] = 900.0,
 ) -> None:
-    """Calibrate on one cell, then project total rate-limit usage and warn (Phase 5)."""
-    raise typer.Exit(_fail(_NOT_YET))
+    """Run one cell and project the full sweep's tokens/turns/cost/wall-clock."""
+    tasks = _load_suite(suite, task)
+    parsed_grid = load_grid(grid)
+    from claude_ablation_lab.orchestrate import estimate_sweep
+    from claude_ablation_lab.runner import ClaudeCodeRunner
+
+    runner = ClaudeCodeRunner(timeout_s=timeout_s)
+    console.print("calibrating on one cell…")
+    est = estimate_sweep(tasks, parsed_grid, runner=runner)
+    _print_estimate(est)
+    if est.calibration_status != "ok":
+        console.print(
+            f"[red]calibration cell status = {est.calibration_status}[/red] — projection unreliable"
+        )
+        raise typer.Exit(2)
 
 
 @app.command()
@@ -196,19 +211,28 @@ def _fmt(value: float | None, places: int = 3) -> str:
 
 
 def _print_report(cells: list) -> None:  # type: ignore[type-arg]
-    """Render report cells: quality (±within-cell CI), cost, latency, Pareto, leakage."""
+    """Render report cells: quality (±epoch CI), cost, latency, Pareto, leakage."""
     table = Table(title="report — quality vs cost (epochs = exploratory run-variance)")
-    for col in ("task", "model", "effort", "variant", "n", "mean", "within-CI", "cost$", "lat s"):
+    for col in (
+        "task",
+        "model",
+        "effort",
+        "variant",
+        "n",
+        "mean",
+        "CI(epoch)",
+        "cost$",
+        "lat s",
+        "",
+    ):
         table.add_column(col)
     for c in cells:
-        flags = " ★" if c.pareto else ""
-        if c.leakage:
-            flags += " ⚠LEAK"
-        if c.n_spec > 1:
-            flags += " ⚠MIXED-SPEC"
+        flags = " ".join(
+            f for f, on in (("★", c.pareto), ("⚠LEAK", c.leakage), ("⚠SPEC", c.n_spec > 1)) if on
+        )
         ci = f"[{_fmt(c.ci_low)},{_fmt(c.ci_high)}]" if c.ci_low is not None else "—"
         table.add_row(
-            c.task_id + flags,
+            c.task_id,
             c.model,
             c.effort,
             c.variant,
@@ -217,9 +241,13 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
             ci,
             _fmt(c.mean_cost, 4),
             _fmt(c.mean_latency, 1),
+            flags,
         )
     console.print(table)
-    console.print("★ = Pareto-optimal (quality vs cost) · ⚠LEAK = shuffled-label control off 0.5")
+    console.print(
+        "★ = Pareto-optimal (quality vs cost) · ⚠LEAK = shuffled-label control off 0.5 · "
+        "CI(epoch) shown at ≥3 epochs · ⚠SPEC = cell mixes task specs"
+    )
 
 
 def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-arg]
@@ -240,6 +268,28 @@ def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-a
             d.note,
         )
     console.print(table)
+
+
+def _print_estimate(est: Estimate) -> None:
+    """Render an Estimate: per-cell calibration → projected totals for the grid."""
+    table = Table(title=f"estimate — {est.n_cells} cells (calibrated on {est.calibration_label})")
+    table.add_column("metric")
+    table.add_column("per cell")
+    table.add_column(f"× {est.n_cells} cells")
+    rows: list[tuple[str, object, object]] = [
+        ("input tokens", est.cell_input_tokens, est.projected_input_tokens),
+        ("output tokens", est.cell_output_tokens, est.projected_output_tokens),
+        ("turns", est.cell_turns, est.projected_turns),
+        ("cost $", f"{est.cell_cost_usd:.4f}", f"{est.projected_cost_usd:.2f}"),
+        ("wall-clock s", f"{est.cell_latency_s:.1f}", f"{est.projected_wall_clock_s:.0f}"),
+    ]
+    for name, per, total in rows:
+        table.add_row(name, str(per), str(total))
+    console.print(table)
+    console.print(
+        "[dim]rough: one calibration cell extrapolated to all cells; per-model cost varies. "
+        "Rate-limit headroom — not dollars — is the real budget.[/dim]"
+    )
 
 
 def _fail(msg: str) -> int:

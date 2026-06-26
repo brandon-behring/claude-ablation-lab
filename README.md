@@ -23,17 +23,26 @@ make hooks        # pre-commit (ruff/black @commit, mypy @pre-push)
 ## Quickstart
 
 ```bash
-ablation estimate tasks/ grids/v1.yaml   # project rate-limit usage before a sweep
-ablation run      tasks/ grids/v1.yaml   # sequential sweep → results/ledger.jsonl (+ transcripts)
-ablation report   results/ledger.jsonl   # score±CI, cost, latency, Pareto (DuckDB)
-ablation compare  results/ledger.jsonl --a repo@v1 --b repo@v2   # paired-bootstrap delta
+# Smoke first — 4 cheap cells, self-contained, proves the loop end-to-end:
+ablation run tasks/ grids/smoke.yaml --task t3_verbatim_anchor --ledger results/smoke.jsonl
+ablation report results/smoke.jsonl
+
+# The focused v1 sweep (63 cells = 3 tasks × valid model×effort × 3 epochs):
+ablation run      tasks/ grids/v1.yaml --dry-run   # preview the expanded grid, no calls
+ablation estimate tasks/ grids/v1.yaml             # run ONE cell, project tokens/turns/cost
+ablation run      tasks/ grids/v1.yaml             # sequential, resumable → results/ledger.jsonl
+ablation report   results/ledger.jsonl             # mean±CI, cost, latency, Pareto, leakage flag
+ablation compare  results/ledger.jsonl --a repo@v1 --b repo@v2   # paired-bootstrap "is it real?"
+ablation regrade  tasks/ --ledger results/ledger.jsonl           # re-score stored runs, no calls
 ```
 
-> **Cost note:** on a Max/Pro subscription there is no per-call dollar charge; `total_cost_usd` is a comparability *metric*. The real budget is **rate-limit headroom** — a big sweep can throttle your normal Claude Code work, so runs are sequential, resumable, and `estimate` warns first.
+> **T2 prerequisite:** the `t2_research_plan` cells run in a worktree of the variant repo in `grids/v1.yaml` (default `~/Claude/research_toolkit@HEAD`) where the `/research-plan` skill loads. If that path is not a worktree-able git checkout, those cells are logged and skipped — the rest of the sweep is unaffected. T1/T3 are infra-agnostic and run out of the box.
+
+> **Cost note:** on a Max/Pro subscription there is no per-call dollar charge; `total_cost_usd` is a comparability *metric*. The real budget is **rate-limit headroom** — a big sweep can throttle your normal Claude Code work, so runs are sequential, resumable, and `estimate` warns first. A hard usage cap halts the sweep cleanly and leaves the ledger resumable.
 
 ## Status
 
-Alpha — Exploration→Development phase. See `CLAUDE.md` for conventions and build phases, and the approved plan at `~/.claude/plans/on-one-of-the-lexical-star.md`.
+Alpha — Development phase. **Build phases 0–5 complete**: runner + worktree isolation, 3 graders (run/grade decoupled), grid + JSONL ledger + orchestrator (resumable, provenance-stamped, back-off/halt), DuckDB `report`/`compare`, and `estimate`. Verified live end-to-end on a 4-cell smoke (run → grade → ledger → report → resume). The focused v1 sweep is user-driven (it spends real rate-limit headroom). See `CLAUDE.md` for conventions and the approved plan at `~/.claude/plans/on-one-of-the-lexical-star.md`; per-phase reviews in `docs/design/`.
 
 ## License
 

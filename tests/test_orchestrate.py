@@ -20,6 +20,7 @@ from claude_ablation_lab.orchestrate import (
     SweepHaltedError,
     _capture_output,
     _regrade_row,
+    estimate_sweep,
     regrade_ledger,
     run_sweep,
     run_with_backoff,
@@ -400,6 +401,52 @@ def test_regrade_row_carries_artifact_missing_and_zeros_cost() -> None:
     assert row.details["regrade_of"] == "run-abc"  # audit trail to the original run
     assert row.cost_usd == 0.0 and row.latency_s == 0.0  # no model cost on a re-grade
     assert score.status == "ok"
+
+
+# --- estimate ---------------------------------------------------------------- #
+
+
+def _ok_usage(*, run_id: str) -> RunResult:
+    return RunResult(
+        run_id=run_id,
+        status="ok",
+        output=_CLAIMS,
+        cost_usd=0.01,
+        latency_s=0.5,
+        returncode=0,
+        model_resolved="m",
+        num_turns=2,
+        session_id="s",
+        usage={"input_tokens": 100, "output_tokens": 50},
+        transcript_path=None,
+        raw=None,
+    )
+
+
+@pytest.mark.unit
+def test_estimate_projects_from_one_cell(tmp_path) -> None:
+    runner = FakeRunner(lambda n, **kw: _ok_usage(run_id=f"r{n}"))
+    grid = Grid(("haiku", "sonnet"), ("low", "high"), ("none",), 1)  # 4 cells
+    est = estimate_sweep(
+        [_anchor_task()], grid, runner=runner, neutral_cwd=tmp_path, sleep=lambda _s: None
+    )
+    assert est.n_cells == 4 and runner.calls == 1  # only ONE cell actually run
+    assert est.cell_input_tokens == 100 and est.projected_input_tokens == 400
+    assert est.projected_turns == 8  # 2 turns × 4 cells
+    assert est.projected_cost_usd == pytest.approx(0.04)
+    assert est.calibration_status == "ok"
+
+
+@pytest.mark.unit
+def test_estimate_handles_halt_without_raising(tmp_path) -> None:
+    runner = FakeRunner(
+        lambda n, **kw: _failed(run_id="x", status="rate_limited", output=_HARD_LIMIT)
+    )
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    est = estimate_sweep(
+        [_anchor_task()], grid, runner=runner, neutral_cwd=tmp_path, sleep=lambda _s: None
+    )
+    assert est.calibration_status == "halted" and est.projected_cost_usd == 0.0
 
 
 # --- integration: real worktree isolation ----------------------------------- #
