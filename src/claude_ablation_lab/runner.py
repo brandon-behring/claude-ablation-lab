@@ -58,9 +58,23 @@ class RunResult:
 
 @runtime_checkable
 class Runner(Protocol):
-    """A substrate that runs a prompt at a given model+effort and reports cost/latency."""
+    """A substrate that runs a prompt at a given model+effort and reports cost/latency.
 
-    def run(self, prompt: str, *, model: str, effort: str, cwd: Path) -> RunResult: ...
+    ``json_schema`` requests structured output (T1's batched verdict array);
+    ``permission_mode`` overrides the runner default per call (agentic T2 needs a
+    non-interactive mode so the skill's file writes don't block).
+    """
+
+    def run(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        effort: str,
+        cwd: Path,
+        json_schema: dict[str, Any] | None = None,
+        permission_mode: str | None = None,
+    ) -> RunResult: ...
 
 
 def extract_json(text: str) -> dict[str, Any] | None:
@@ -158,7 +172,15 @@ class ClaudeCodeRunner:
     max_budget_usd: float | None = None
     permission_mode: str | None = None
 
-    def _argv(self, prompt: str, model: str, effort: str) -> list[str]:
+    def _argv(
+        self,
+        prompt: str,
+        model: str,
+        effort: str,
+        *,
+        json_schema: dict[str, Any] | None = None,
+        permission_mode: str | None = None,
+    ) -> list[str]:
         argv = [
             "claude",
             "-p",
@@ -170,10 +192,13 @@ class ClaudeCodeRunner:
             "--output-format",
             "json",
         ]
+        if json_schema is not None:
+            argv += ["--json-schema", json.dumps(json_schema)]
         if self.max_budget_usd is not None:
             argv += ["--max-budget-usd", str(self.max_budget_usd)]
-        if self.permission_mode is not None:
-            argv += ["--permission-mode", self.permission_mode]
+        mode = permission_mode or self.permission_mode
+        if mode is not None:
+            argv += ["--permission-mode", mode]
         return argv
 
     def _env(self) -> dict[str, str]:
@@ -213,9 +238,20 @@ class ClaudeCodeRunner:
             raw=None,
         )
 
-    def run(self, prompt: str, *, model: str, effort: str, cwd: Path) -> RunResult:
+    def run(
+        self,
+        prompt: str,
+        *,
+        model: str,
+        effort: str,
+        cwd: Path,
+        json_schema: dict[str, Any] | None = None,
+        permission_mode: str | None = None,
+    ) -> RunResult:
         run_id = uuid.uuid4().hex
-        argv = self._argv(prompt, model, effort)
+        argv = self._argv(
+            prompt, model, effort, json_schema=json_schema, permission_mode=permission_mode
+        )
         base_envelope: dict[str, Any] = {"argv": argv, "cwd": str(cwd)}
         start = time.monotonic()
         try:

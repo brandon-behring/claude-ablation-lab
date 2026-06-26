@@ -1,0 +1,10 @@
+# Tiny smoke grid: 2 models × 2 efforts × 1 epoch in a neutral cwd (4 cells).
+# Pair with a self-contained task to prove the loop end-to-end cheaply, e.g.:
+#   ablation run tasks grids/smoke.yaml --task t3_verbatim_anchor
+models: [haiku, sonnet]
+efforts: [low, high]
+variants: [none]
+epochs: 1
+effort_support:
+  haiku: [low, high]
+  sonnet: [low, high]
