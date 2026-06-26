@@ -96,12 +96,42 @@ def test_report_marks_pareto_frontier(tmp_path) -> None:
 @pytest.mark.unit
 def test_report_flags_label_leakage(tmp_path) -> None:
     led = tmp_path / "l.jsonl"
-    _row(led, rid="leaky", value=0.95, sub={"shuffled_auroc": 0.85, "ci_low": 0.9, "ci_high": 1.0})
+    _row(led, rid="leaky", value=0.95, sub={"shuffled_auroc": 0.85})
     _row(led, rid="clean", model="opus", value=0.9, sub={"shuffled_auroc": 0.50})
     cells = {c.model: c for c in report(led)}
     assert cells["haiku"].leakage is True  # shuffled control far from 0.5 → suspect
     assert cells["opus"].leakage is False
-    assert cells["haiku"].ci_low == pytest.approx(0.9)  # within-cell CI surfaced
+
+
+@pytest.mark.unit
+def test_report_leakage_uses_worst_epoch_not_mean(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    # One leaky epoch (0.85) among clean ones: mean dev 0.117 < band, MAX dev 0.35 > band.
+    for i, s in enumerate([0.85, 0.50, 0.50]):
+        _row(led, rid=f"e{i}", epoch=i, sub={"shuffled_auroc": s})
+    [cell] = report(led)
+    assert cell.leakage is True  # the worst epoch fires the gate, not the average
+
+
+@pytest.mark.unit
+def test_report_across_epoch_ci_only_at_three_plus_epochs(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="a", epoch=0, value=0.6)
+    _row(led, rid="b", epoch=1, value=0.9)
+    assert report(led)[0].ci_low is None  # 2 epochs → no across-epoch CI
+    _row(led, rid="c", epoch=2, value=0.75)
+    [cell] = report(led)
+    assert cell.ci_low is not None and cell.ci_high is not None  # 3 epochs → CI of the mean
+
+
+@pytest.mark.unit
+def test_report_excludes_run_whose_latest_grade_failed(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    # Same run_id: an older ok grade, then a newer grader_error (a re-grade that broke).
+    _row(led, rid="r1", gv="v1", value=0.8, ts="2026-01-01", grade_status="ok")
+    _row(led, rid="r1", gv="v2", value=0.0, ts="2026-02-01", grade_status="grader_error")
+    # The stale ok score must NOT survive — the run drops out entirely.
+    assert report(led) == []
 
 
 @pytest.mark.unit
@@ -118,14 +148,29 @@ def test_report_ignores_failed_and_ungraded_rows(tmp_path) -> None:
 def test_compare_detects_a_real_delta(tmp_path) -> None:
     led = tmp_path / "l.jsonl"
     va, vb = "repo@a", "repo@b"
-    # B consistently beats A across both configs → delta>0, CI should exclude 0.
-    for cfg, (model, effort) in enumerate([("haiku", "low"), ("sonnet", "high")]):
+    configs = [("haiku", "low"), ("haiku", "high"), ("sonnet", "low"), ("sonnet", "high")]
+    # B beats A across all 4 configs (≥ the floor) → delta>0, CI excludes 0 → real.
+    for cfg, (model, effort) in enumerate(configs):
         _row(led, rid=f"a{cfg}", task="t2", variant=va, model=model, effort=effort, value=0.50)
         _row(led, rid=f"b{cfg}", task="t2", variant=vb, model=model, effort=effort, value=0.80)
     [row] = compare(led, va, vb)
-    assert row.task_id == "t2" and row.n_pairs == 2
+    assert row.task_id == "t2" and row.n_pairs == 4
     assert row.delta == pytest.approx(0.30)
-    assert row.ci_low is not None and row.real is True  # CI excludes 0
+    assert row.ci_low is not None and row.real is True
+
+
+@pytest.mark.unit
+def test_compare_below_floor_is_never_real(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    va, vb = "repo@a", "repo@b"
+    # Only 2 same-sign configs: the bootstrap CI excludes 0 by construction, so the
+    # verdict must be withheld (real=False) despite a non-null CI.
+    for cfg, (model, effort) in enumerate([("haiku", "low"), ("sonnet", "high")]):
+        _row(led, rid=f"a{cfg}", task="t2", variant=va, model=model, effort=effort, value=0.5)
+        _row(led, rid=f"b{cfg}", task="t2", variant=vb, model=model, effort=effort, value=0.8)
+    [row] = compare(led, va, vb)
+    assert row.n_pairs == 2 and row.real is False  # tautology guard
+    assert "floor" in row.note
 
 
 @pytest.mark.unit
@@ -136,7 +181,6 @@ def test_compare_single_config_has_no_ci(tmp_path) -> None:
     _row(led, rid="b0", task="t2", variant=vb, value=0.9)
     [row] = compare(led, va, vb)
     assert row.n_pairs == 1 and row.ci_low is None and row.real is False
-    assert "no CI" in row.note
 
 
 @pytest.mark.unit

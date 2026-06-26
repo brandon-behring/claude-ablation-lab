@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import numpy as np
@@ -38,19 +39,32 @@ __all__ = ["ReportCell", "CompareRow", "report", "compare", "LEAKAGE_BAND"]
 
 logger = logging.getLogger(__name__)
 
-#: |mean shuffled-label AUROC − 0.5| beyond this flags suspected leakage.
+#: max |shuffled-label AUROC − 0.5| over a cell's epochs beyond this flags leakage.
 LEAKAGE_BAND = 0.15
+#: epochs needed before an across-epoch bootstrap CI of the mean is reported.
+MIN_EPOCHS_FOR_CI = 3
+#: matched configs needed before compare may call a delta "real" (Type-I control).
+MIN_PAIRS_FOR_REAL = 4
 
-# Latest ok grade per run_id (re-grades don't double-count), ok runs only.
+# Latest grade per run_id, then keep only runs whose LATEST grade is ok.
+#
+# Order matters: filtering grade_status BEFORE the window would let a run whose
+# *latest* grade is a grader_error fall back to an older ``ok`` grade — silently
+# reporting a stale score the re-grade meant to replace. So we dedupe first
+# (run_status='ok' only — infra failures never count), pick the most recent grade
+# per run (ts, tie-broken by grader_version for determinism), then drop runs whose
+# surviving grade is not ok.
 _LATEST_OK = """
-WITH ok_grades AS (
+WITH ok_runs AS (
     SELECT * FROM read_json(?, format='newline_delimited')
-    WHERE run_status = 'ok' AND grade_status = 'ok'
+    WHERE run_status = 'ok'
 ),
 ranked AS (
-    SELECT *, row_number() OVER (PARTITION BY run_id ORDER BY ts DESC) AS rn FROM ok_grades
+    SELECT *, row_number() OVER (
+        PARTITION BY run_id ORDER BY ts DESC, grader_version DESC
+    ) AS rn FROM ok_runs
 )
-SELECT * FROM ranked WHERE rn = 1
+SELECT * FROM ranked WHERE rn = 1 AND grade_status = 'ok'
 """
 
 
@@ -97,26 +111,20 @@ def _connect() -> duckdb.DuckDBPyConnection:
 def report(ledger_path: Path | str) -> list[ReportCell]:
     """Aggregate the ledger into per-cell quality/cost rows (Pareto + leakage flagged).
 
-    Returns an empty list for a missing/empty ledger. Cells are ordered by task,
+    Per-epoch rows are pulled and aggregated in Python so the cell's CI is an
+    honest **across-epoch bootstrap of the mean** (reported only at ≥
+    :data:`MIN_EPOCHS_FOR_CI` epochs) — never the meaningless average of per-epoch
+    CI endpoints — and leakage fires on the **worst** epoch, not the average.
+    Returns an empty list for a missing/empty ledger; cells are ordered by task,
     then descending mean quality.
     """
     path = Path(ledger_path)
     if not path.exists():
         return []
     sql = f"""
-    SELECT task_id, model, effort, variant,
-        count(*) AS n_epochs,
-        count(DISTINCT spec_sha) AS n_spec,
-        avg(value) AS mean_value,
-        stddev_samp(value) AS sd_value,
-        avg(cost_usd) AS mean_cost,
-        avg(latency_s) AS mean_latency,
-        avg(TRY_CAST(json_extract(subscores, '$.ci_low') AS DOUBLE)) AS ci_low,
-        avg(TRY_CAST(json_extract(subscores, '$.ci_high') AS DOUBLE)) AS ci_high,
-        avg(TRY_CAST(json_extract(subscores, '$.shuffled_auroc') AS DOUBLE)) AS shuffled
+    SELECT task_id, model, effort, variant, spec_sha, value, cost_usd, latency_s,
+        TRY_CAST(json_extract(subscores, '$.shuffled_auroc') AS DOUBLE) AS shuffled
     FROM ({_LATEST_OK})
-    GROUP BY task_id, model, effort, variant
-    ORDER BY task_id, mean_value DESC
     """
     con = _connect()
     try:
@@ -124,26 +132,45 @@ def report(ledger_path: Path | str) -> list[ReportCell]:
     finally:
         con.close()
 
-    cells = [
-        ReportCell(
-            task_id=r[0],
-            model=r[1],
-            effort=r[2],
-            variant=r[3],
-            n_epochs=int(r[4]),
-            n_spec=int(r[5]),
-            mean_value=float(r[6]),
-            sd_value=None if r[7] is None else float(r[7]),
-            mean_cost=float(r[8]),
-            mean_latency=float(r[9]),
-            ci_low=None if r[10] is None else float(r[10]),
-            ci_high=None if r[11] is None else float(r[11]),
-            shuffled_auroc=None if r[12] is None else float(r[12]),
-            leakage=r[12] is not None and abs(float(r[12]) - 0.5) > LEAKAGE_BAND,
-        )
-        for r in rows
-    ]
+    grouped: dict[tuple[str, str, str, str], list[tuple[Any, ...]]] = {}
+    for r in rows:
+        grouped.setdefault((r[0], r[1], r[2], r[3]), []).append(r)
+    cells = [_aggregate_cell(key, group) for key, group in grouped.items()]
+    cells.sort(key=lambda c: (c.task_id, -c.mean_value))
     return _mark_pareto(cells)
+
+
+def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]) -> ReportCell:
+    """Aggregate one cell's per-epoch rows into a :class:`ReportCell` (honest stats)."""
+    task_id, model, effort, variant = key
+    values = np.array([row[5] for row in group], dtype=float)
+    costs = np.array([row[6] for row in group], dtype=float)
+    lats = np.array([row[7] for row in group], dtype=float)
+    shuffles = [float(row[8]) for row in group if row[8] is not None]
+    n = len(values)
+
+    ci_low = ci_high = None
+    if n >= MIN_EPOCHS_FOR_CI:  # a proper bootstrap CI of the across-epoch mean
+        ci = block_bootstrap_on_folds(values, n_resamples=2000, rng=42)
+        ci_low, ci_high = float(ci.ci_low), float(ci.ci_high)
+    # Leakage fires on the WORST epoch — averaging would let one leaky run hide.
+    max_dev = max((abs(s - 0.5) for s in shuffles), default=None)
+    return ReportCell(
+        task_id=task_id,
+        model=model,
+        effort=effort,
+        variant=variant,
+        n_epochs=n,
+        n_spec=len({row[4] for row in group}),
+        mean_value=float(values.mean()),
+        sd_value=float(values.std(ddof=1)) if n >= 2 else None,
+        mean_cost=float(costs.mean()),
+        mean_latency=float(lats.mean()),
+        ci_low=ci_low,
+        ci_high=ci_high,
+        shuffled_auroc=(sum(shuffles) / len(shuffles)) if shuffles else None,
+        leakage=max_dev is not None and max_dev > LEAKAGE_BAND,
+    )
 
 
 def _mark_pareto(cells: list[ReportCell]) -> list[ReportCell]:
@@ -168,8 +195,11 @@ def compare(ledger_path: Path | str, variant_a: str, variant_b: str) -> list[Com
     For each task, every (model, effort) present under *both* variants contributes
     one paired observation (epochs averaged within a config). The delta is
     ``mean_b − mean_a``; the CI is a bootstrap over those per-config differences.
-    ``real`` is ``True`` only when the CI excludes 0 *and* there are ≥ 2 configs
-    (a single config cannot support a bootstrap) — always exploratory at v1 scale.
+    ``real`` is ``True`` only when the CI excludes 0 *and* there are ≥
+    :data:`MIN_PAIRS_FOR_REAL` configs: with 2–3 same-sign diffs the bootstrap CI
+    excludes 0 by construction (a tautology, not evidence), so a smaller n yields
+    ``real=False`` with an explanatory note. No multiple-comparison correction is
+    applied across tasks (v1 exploratory) — read several "real" verdicts with care.
     """
     path = Path(ledger_path)
     if not path.exists():
@@ -216,29 +246,33 @@ def _compare_task(
     a_vals = np.array([a for a, _ in pairs], dtype=float)
     b_vals = np.array([b for _, b in pairs], dtype=float)
     diffs = b_vals - a_vals
-    delta = float(diffs.mean())
-    if len(diffs) < 2:
+    n = len(diffs)
+    mean_a, mean_b, delta = float(a_vals.mean()), float(b_vals.mean()), float(diffs.mean())
+
+    if n < MIN_PAIRS_FOR_REAL:
+        # Too few configs: a same-sign 2–3 diff bootstrap excludes 0 by construction,
+        # so report the CI for context but never call it "real".
+        ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42) if n >= 2 else None
         return CompareRow(
             task_id=task_id,
-            n_pairs=len(diffs),
-            mean_a=float(a_vals.mean()),
-            mean_b=float(b_vals.mean()),
+            n_pairs=n,
+            mean_a=mean_a,
+            mean_b=mean_b,
             delta=delta,
-            ci_low=None,
-            ci_high=None,
+            ci_low=None if ci is None else float(ci.ci_low),
+            ci_high=None if ci is None else float(ci.ci_high),
             real=False,
-            note="1 config — no CI (need ≥2)",
+            note=f"n={n} configs — below the >={MIN_PAIRS_FOR_REAL} floor for a verdict",
         )
     ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42)
-    real = ci.ci_low > 0.0 or ci.ci_high < 0.0  # interval excludes 0
     return CompareRow(
         task_id=task_id,
-        n_pairs=len(diffs),
-        mean_a=float(a_vals.mean()),
-        mean_b=float(b_vals.mean()),
+        n_pairs=n,
+        mean_a=mean_a,
+        mean_b=mean_b,
         delta=delta,
         ci_low=float(ci.ci_low),
         ci_high=float(ci.ci_high),
-        real=real,
+        real=ci.ci_low > 0.0 or ci.ci_high < 0.0,  # interval excludes 0
         note="exploratory (small n)",
     )
