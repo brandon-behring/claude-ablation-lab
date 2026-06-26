@@ -13,7 +13,8 @@ infra_repo: null
 timeout_s: 300
 tags: [calibration, single-turn, eval-toolkit, infra-agnostic]
 params:
-  gold_parquet: ~/Claude/prompt_injection_detector/data/final_holdout/final_holdout.parquet
+  # Public, MIT-licensed balanced split (text + label, 1=injection); $T1_HOLDOUT_PATH overrides.
+  gold_parquet: ~/Claude/prompt-injection-detection-prototype/tests/fixtures/processed/fold-0/seed-42/train.parquet
   subsample_n: 60
   seed: 42
 gold: {}

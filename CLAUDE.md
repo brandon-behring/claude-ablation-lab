@@ -82,7 +82,7 @@ ablation estimate|run|report|compare ...
 
 - `eval-toolkit` → bootstrap CIs, paired-bootstrap diff, AUROC/PR-AUC (installed editable from `~/Claude/eval-toolkit`).
 - `research_toolkit/validators/research_plan.py` → T2 grader (subprocess; `validate(path)->list[str]`).
-- `prompt_injection_detector/evals/final_holdout/` → T1 gold; `evals/judge_cache/` → injection-judge prompt+parse pattern to lift.
+- `prompt-injection-detection-prototype` (public, MIT) → T1 gold: a balanced `text`+`label` split (`$T1_HOLDOUT_PATH` overrides the default path).
 
 ## Upstream-friction discipline
 
