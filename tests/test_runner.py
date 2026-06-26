@@ -199,3 +199,42 @@ def test_run_nonzero_rate_limit_stays_rate_limited(
         "hi", model="haiku", effort="low", cwd=tmp_path
     )
     assert res.status == "rate_limited"  # classification wins over the nonzero override
+
+
+# --- Phase 3: structured output + per-call permission override ---------------
+
+
+@pytest.mark.unit
+def test_argv_includes_json_schema_when_requested() -> None:
+    schema = {"type": "object", "properties": {"x": {"type": "integer"}}}
+    argv = ClaudeCodeRunner()._argv("p", "haiku", "low", json_schema=schema)
+    assert "--json-schema" in argv
+    assert json.loads(argv[argv.index("--json-schema") + 1]) == schema  # serialized inline
+
+
+@pytest.mark.unit
+def test_argv_per_call_permission_mode_overrides_instance() -> None:
+    runner = ClaudeCodeRunner(permission_mode="default")
+    argv = runner._argv("p", "haiku", "low", permission_mode="acceptEdits")
+    assert argv[argv.index("--permission-mode") + 1] == "acceptEdits"
+
+
+@pytest.mark.unit
+def test_argv_omits_json_schema_by_default() -> None:
+    assert "--json-schema" not in ClaudeCodeRunner()._argv("p", "haiku", "low")
+
+
+@pytest.mark.unit
+def test_run_passes_json_schema_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, list[str]] = {}
+    success = (FIXTURES / "claude_json_success.json").read_text()
+
+    def fake(argv, *a, **k):  # noqa: ANN001, ANN002, ANN003
+        captured["argv"] = argv
+        return _fake_proc(success)
+
+    monkeypatch.setattr("claude_ablation_lab.runner.subprocess.run", fake)
+    ClaudeCodeRunner(transcript_dir=tmp_path).run(
+        "hi", model="haiku", effort="low", cwd=tmp_path, json_schema={"type": "object"}
+    )
+    assert "--json-schema" in captured["argv"]

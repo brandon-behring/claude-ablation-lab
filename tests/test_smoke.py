@@ -27,12 +27,5 @@ def test_cli_version_command() -> None:
 def test_cli_exposes_expected_commands() -> None:
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    for cmd in ("estimate", "run", "report", "compare"):
+    for cmd in ("estimate", "run", "regrade", "report", "compare"):
         assert cmd in result.stdout
-
-
-@pytest.mark.unit
-def test_unimplemented_commands_fail_cleanly() -> None:
-    # Scaffolded-but-not-implemented commands should exit non-zero, not crash.
-    result = runner.invoke(app, ["report", "results/ledger.jsonl"])
-    assert result.exit_code == 1
