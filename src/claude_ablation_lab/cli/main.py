@@ -126,8 +126,14 @@ def estimate(
 def report(
     ledger: Annotated[Path, typer.Argument(help="JSONL ledger to analyze")],
 ) -> None:
-    """DuckDB aggregates per task×model×effort: score±CI, cost, latency, Pareto (Phase 4)."""
-    raise typer.Exit(_fail(_NOT_YET))
+    """DuckDB aggregates per task×model×effort: score±CI, cost, latency, Pareto."""
+    from claude_ablation_lab.analyze import report as run_report
+
+    cells = run_report(ledger)
+    if not cells:
+        console.print(f"[yellow]no graded rows in {ledger}[/yellow]")
+        return
+    _print_report(cells)
 
 
 @app.command()
@@ -136,8 +142,14 @@ def compare(
     a: Annotated[str, typer.Option("--a", help="Baseline variant (infra_repo@ref)")],
     b: Annotated[str, typer.Option("--b", help="Candidate variant (infra_repo@ref)")],
 ) -> None:
-    """Per-task delta between two variants with paired bootstrap — is it real? (Phase 4)."""
-    raise typer.Exit(_fail(_NOT_YET))
+    """Per-task delta between two variants with a paired bootstrap — is it real?"""
+    from claude_ablation_lab.analyze import compare as run_compare
+
+    deltas = run_compare(ledger, a, b)
+    if not deltas:
+        console.print(f"[yellow]no task ran under both {a} and {b} in {ledger}[/yellow]")
+        return
+    _print_compare(deltas, a, b)
 
 
 def _print_cells(cells: list) -> None:  # type: ignore[type-arg]
@@ -177,6 +189,57 @@ def _print_summary(summary: SweepSummary) -> None:
             f"[yellow]note:[/yellow] {summary.grader_error} grader_error / "
             f"{summary.unparseable} unparseable graded rows — inspect before trusting scores"
         )
+
+
+def _fmt(value: float | None, places: int = 3) -> str:
+    return "—" if value is None else f"{value:.{places}f}"
+
+
+def _print_report(cells: list) -> None:  # type: ignore[type-arg]
+    """Render report cells: quality (±within-cell CI), cost, latency, Pareto, leakage."""
+    table = Table(title="report — quality vs cost (epochs = exploratory run-variance)")
+    for col in ("task", "model", "effort", "variant", "n", "mean", "within-CI", "cost$", "lat s"):
+        table.add_column(col)
+    for c in cells:
+        flags = " ★" if c.pareto else ""
+        if c.leakage:
+            flags += " ⚠LEAK"
+        if c.n_spec > 1:
+            flags += " ⚠MIXED-SPEC"
+        ci = f"[{_fmt(c.ci_low)},{_fmt(c.ci_high)}]" if c.ci_low is not None else "—"
+        table.add_row(
+            c.task_id + flags,
+            c.model,
+            c.effort,
+            c.variant,
+            str(c.n_epochs),
+            _fmt(c.mean_value),
+            ci,
+            _fmt(c.mean_cost, 4),
+            _fmt(c.mean_latency, 1),
+        )
+    console.print(table)
+    console.print("★ = Pareto-optimal (quality vs cost) · ⚠LEAK = shuffled-label control off 0.5")
+
+
+def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-arg]
+    """Render variant A→B deltas with the paired-bootstrap verdict."""
+    table = Table(title=f"compare  A={a}  →  B={b}")
+    for col in ("task", "pairs", "mean A", "mean B", "Δ (B−A)", "95% CI", "real?", "note"):
+        table.add_column(col)
+    for d in deltas:
+        ci = f"[{_fmt(d.ci_low)},{_fmt(d.ci_high)}]" if d.ci_low is not None else "—"
+        table.add_row(
+            d.task_id,
+            str(d.n_pairs),
+            _fmt(d.mean_a),
+            _fmt(d.mean_b),
+            _fmt(d.delta),
+            ci,
+            "[green]yes[/green]" if d.real else "no",
+            d.note,
+        )
+    console.print(table)
 
 
 def _fail(msg: str) -> int:
