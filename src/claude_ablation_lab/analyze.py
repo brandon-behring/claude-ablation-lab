@@ -33,7 +33,11 @@ from typing import Any
 
 import duckdb
 import numpy as np
-from eval_toolkit.bootstrap import block_bootstrap_on_folds
+
+# ``eval_toolkit.bootstrap`` is imported lazily inside the functions that use it
+# (see ``_aggregate_cell`` / ``_compare_task``) so ``import analyze`` — and the CLI
+# ``report``/``compare`` --help paths — do not hard-require the optional eval-toolkit
+# dependency. ``tests/test_analyze.py`` guards with ``pytest.importorskip``.
 
 __all__ = ["ReportCell", "CompareRow", "report", "compare", "LEAKAGE_BAND"]
 
@@ -151,6 +155,8 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
 
     ci_low = ci_high = None
     if n >= MIN_EPOCHS_FOR_CI:  # a proper bootstrap CI of the across-epoch mean
+        from eval_toolkit.bootstrap import block_bootstrap_on_folds
+
         ci = block_bootstrap_on_folds(values, n_resamples=2000, rng=42)
         ci_low, ci_high = float(ci.ci_low), float(ci.ci_high)
     # Leakage fires on the WORST epoch — averaging would let one leaky run hide.
@@ -252,7 +258,11 @@ def _compare_task(
     if n < MIN_PAIRS_FOR_REAL:
         # Too few configs: a same-sign 2–3 diff bootstrap excludes 0 by construction,
         # so report the CI for context but never call it "real".
-        ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42) if n >= 2 else None
+        ci = None
+        if n >= 2:  # lazy import keeps eval_toolkit off analyze's module-import path
+            from eval_toolkit.bootstrap import block_bootstrap_on_folds
+
+            ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42)
         return CompareRow(
             task_id=task_id,
             n_pairs=n,
@@ -264,6 +274,8 @@ def _compare_task(
             real=False,
             note=f"n={n} configs — below the >={MIN_PAIRS_FOR_REAL} floor for a verdict",
         )
+    from eval_toolkit.bootstrap import block_bootstrap_on_folds
+
     ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42)
     return CompareRow(
         task_id=task_id,

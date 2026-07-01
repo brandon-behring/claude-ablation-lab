@@ -1,8 +1,8 @@
 # claude-ablation-lab — working conventions
 
-> Last updated: 2026-06-25
+> Last updated: 2026-07-01
 
-A personal **model × thinking-effort × config** ablation/regression harness for Claude Code. See [README.md](README.md). Approved plan: `~/.claude/plans/on-one-of-the-lexical-star.md`.
+A personal **model × thinking-effort × config** ablation/regression harness for Claude Code. See [README.md](README.md). Build history: `experiments/log.txt` + per-phase reviews in `docs/design/`.
 
 ## Hub pattern references (MANDATORY)
 
@@ -21,9 +21,9 @@ Enforceable style is **config — the single source of truth** (`pyproject.toml`
 - Ledger rows keyed by `grader_version` (re-grade without re-running); `reset_clean` operates only on linked worktrees (`.git` is a file).
 - Coverage tiers: graders/stats 90%+, runner/worktree 80%+, CLI best-effort.
 
-## Current phase: EXPLORATION → DEVELOPMENT
+## Current phase: DEVELOPMENT (build phases 0–5 complete)
 
-**Hybrid rigor (decided):** correctness-critical code is Development-grade *from day 1*; orchestration is Exploration-loose until the loop is proven.
+**Hybrid rigor (decided):** correctness-critical code is Development-grade *from day 1*; orchestration was Exploration-loose until the loop was proven — now graduated (the run→grade→ledger→report loop is verified live end-to-end).
 
 | Code | Rigor | Coverage |
 |------|-------|----------|
@@ -33,9 +33,9 @@ Enforceable style is **config — the single source of truth** (`pyproject.toml`
 
 | Checkpoint | Status |
 |------------|--------|
-| Leakage gate (T1 shuffled-label) | Not yet |
-| Test coverage | — |
-| Pre-commit hooks | `make hooks` |
+| Leakage gate (T1 shuffled-label) | Operationalized (Phase 4 — flags at aggregation, `analyze.LEAKAGE_BAND`) |
+| Test coverage | ~94% (CI floor 90) |
+| Pre-commit hooks | `make hooks` (ruff/black/mypy + gitleaks + detect-private-key) |
 
 ## Core principles
 
@@ -71,7 +71,7 @@ results/  data/  .worktrees/   (gitignored)
 ## Key commands
 
 ```bash
-make install   # eval-toolkit (editable, local) + this package [dev]
+make install   # eval-toolkit (pinned from GitHub; editable via EVAL_TOOLKIT=) + this package [dev]
 make ci        # ruff + black + mypy + pytest
 pytest -m "unit or golden"     # fast loop
 pytest -m integration          # tests that shell out to claude / git
@@ -80,7 +80,7 @@ ablation estimate|run|report|compare ...
 
 ## Reuse map (don't re-derive)
 
-- `eval-toolkit` → bootstrap CIs, paired-bootstrap diff, AUROC/PR-AUC (installed editable from `~/Claude/eval-toolkit`).
+- `eval-toolkit` → bootstrap CIs, paired-bootstrap diff, AUROC/PR-AUC (pinned from GitHub by `make install`; editable via `EVAL_TOOLKIT=`).
 - `research_toolkit/validators/research_plan.py` → T2 grader (subprocess; `validate(path)->list[str]`).
 - `prompt-injection-detection-prototype` (public, MIT) → T1 gold: a balanced `text`+`label` split (`$T1_HOLDOUT_PATH` overrides the default path).
 
@@ -90,6 +90,6 @@ Changes needed in `eval-toolkit` / `research_toolkit` → file a `consumer:claud
 
 ## Build phases
 
-0. ✅ Scaffold. 1. ✅ Runner + worktree. **1.5 (NEXT — harden the run cell): per-cell worktree isolation (`reset --hard && clean -fdx`), full subprocess envelope (argv/cwd/returncode/stdout/stderr + timeout `as e`), catch-all → `infra_error`, robust JSON, worktree validation/lock, cell-contract test.** 2. Graders (tested/90%) consuming stored transcripts, keyed by `grader_version` (run/grade decoupled) + leakage gate. 3. Grid + JSONL ledger (key incl. `grader_version`; provenance: claude version + global layer + MCP; orchestrator back-off). 4. DuckDB report/compare (CI over within-cell examples; epochs = run-variance; v1 exploratory). 5. `--estimate` (tokens+turns) → smoke → focused v1 sweep. 6 (deferred): API adapter, plotting, backlog, book spinoff.
+0. ✅ Scaffold. 1. ✅ Runner + worktree. 1.5. ✅ Hardened run cell (per-cell worktree isolation, full subprocess envelope, catch-all → `infra_error`, robust JSON, worktree validation/lock, cell-contract test). 2. ✅ Graders (tested/90%+) keyed by `grader_version` (run/grade decoupled) + leakage gate. 3. ✅ Grid + JSONL ledger (provenance-stamped; orchestrator back-off/halt). 4. ✅ DuckDB report/compare (within-cell + across-epoch CIs; v1 exploratory). 5. ✅ `estimate` → smoke; the focused v1 sweep is user-driven. **6 (in progress): plotting + anchor-strict + a public demo-infra A/B; deferred within 6: API adapter, probability-AUROC, book spinoff.**
 
 > Roadmap refined 2026-06-25 after a 2-voice independent review — see `docs/design/2026-06-25_independent-review.md`.

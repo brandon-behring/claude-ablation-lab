@@ -33,8 +33,6 @@ app = typer.Typer(
 )
 console = Console()
 
-_NOT_YET = "Command scaffolded but not yet implemented — see CLAUDE.md build phases."
-
 
 def _load_suite(suite: Path, only: list[str] | None) -> list[Task]:
     """Load tasks from a dir (all ``*.yaml``) or a single YAML file, optional id filter."""
@@ -290,11 +288,6 @@ def _print_estimate(est: Estimate) -> None:
         "[dim]rough: one calibration cell extrapolated to all cells; per-model cost varies. "
         "Rate-limit headroom — not dollars — is the real budget.[/dim]"
     )
-
-
-def _fail(msg: str) -> int:
-    typer.echo(msg, err=True)
-    return 1
 
 
 if __name__ == "__main__":
