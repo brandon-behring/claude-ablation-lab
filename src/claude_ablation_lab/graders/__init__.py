@@ -15,15 +15,15 @@ if TYPE_CHECKING:
 
 __all__ = ["get_grader", "GRADER_NAMES"]
 
-GRADER_NAMES = ("classification", "validator", "anchor")
+GRADER_NAMES = ("classification", "validator", "anchor", "anchor_strict")
 
 
 def get_grader(name: str) -> Grader:
-    """Return a grader instance by name (``classification`` / ``validator`` / ``anchor``)."""
-    if name == "anchor":
+    """Return a grader instance by name (``classification`` / ``validator`` / ``anchor``[``_strict``])."""
+    if name in ("anchor", "anchor_strict"):
         from claude_ablation_lab.graders.anchor import AnchorGrader
 
-        return AnchorGrader()
+        return AnchorGrader(strict=name == "anchor_strict")
     if name == "validator":
         from claude_ablation_lab.graders.validator import ValidatorGrader
 
