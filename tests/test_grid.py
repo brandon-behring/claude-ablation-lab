@@ -65,6 +65,15 @@ def test_expand_task_variant_compatibility() -> None:
 
 
 @pytest.mark.unit
+def test_expand_drops_malformed_variant_without_aborting() -> None:
+    # A malformed variant spec must drop-and-log like every other invalid combo — one bad
+    # entry must not abort the whole expansion (and with it dry-run/estimate/run).
+    grid = Grid(("haiku",), ("low",), ("repoA@v1", "MALFORMED-NO-AT"), 1)
+    cells = expand_grid(grid, [_task("t", infra_repo="repoA")])
+    assert {c.variant for c in cells} == {"repoA@v1"}
+
+
+@pytest.mark.unit
 def test_expand_drops_task_under_mismatched_infra_repo() -> None:
     # A grid may list several infra repos; a task runs only under ITS repo's refs, never
     # an unrelated one (which would load the wrong project's config and measure nothing).

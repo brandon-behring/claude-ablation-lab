@@ -10,6 +10,10 @@
 # grids/showcase.yaml points task t4_demo_infra at <dest>@with-skill / @without-skill.
 #
 # Usage:  examples/demo-infra/setup.sh [dest]      (default: ./.demo-infra)
+#
+# Run from the REPO ROOT: tasks/t4_demo_infra.yaml and grids/showcase.yaml reference the
+# repo by the literal string `.demo-infra`, resolved against `ablation run`'s cwd. A
+# custom [dest] only works if you edit BOTH of those to the same string.
 set -euo pipefail
 DEST="${1:-$PWD/.demo-infra}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -26,6 +30,8 @@ fi
 
 rm -rf "$DEST"
 git init -q "$DEST"                          # `checkout -b` below is compatible with git < 2.28
+touch "$DEST/$MARKER"                        # marker FIRST: a crash below must not leave an
+                                             # unmarked dir the clobber-guard then refuses forever
 git -C "$DEST" config user.email demo@example.com
 git -C "$DEST" config user.name demo
 git -C "$DEST" config commit.gpgsign false   # don't inherit a user's global commit signing
@@ -33,7 +39,6 @@ git -C "$DEST" checkout -q -b without-skill
 
 # without-skill: the baseline (a README + our marker; no .claude/)
 cp "$HERE/content/README.md" "$DEST/README.md"
-touch "$DEST/$MARKER"
 git -C "$DEST" add -A
 git -C "$DEST" commit -q -m "demo-infra: baseline project (no skill)"
 

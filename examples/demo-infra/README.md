@@ -22,6 +22,10 @@ large and **honest** — the skill supplies genuinely-needed knowledge, not a ri
 
 ## Run it
 
+**Run everything from the repo root** — the `.demo-infra` strings in the task/grid resolve
+against the directory you invoke `ablation` from (a custom `setup.sh` destination only works
+if you edit `tasks/t4_demo_infra.yaml` and `grids/showcase.yaml` to the same string).
+
 ```bash
 examples/demo-infra/setup.sh          # → ./.demo-infra  (refs: with-skill, without-skill)
 # the full showcase filters to the two public tasks (grids don't select tasks):

@@ -25,12 +25,15 @@ def _t4_gold() -> dict[str, Any]:
 
 
 @pytest.mark.unit
-def test_gold_matches_the_skill_reference() -> None:
+def test_gold_equals_the_skill_reference_body() -> None:
     # The model quotes the skill's reference; the grader scores against the task gold, so
-    # the two must be identical or verbatim quotes would fail to match. Guard against drift.
+    # the two must be IDENTICAL in both directions: gold text missing from the skill would
+    # break with-skill quotes, and skill text missing from the gold would mark honest
+    # quotes as misses (silently deflating the with-skill headline). Equality guards both.
     gold_src = _t4_gold()["source_text"].strip()
     skill = (DEMO / "content" / "project-reference.md").read_text()
-    assert gold_src in skill
+    body = skill.split("---", 2)[2].strip()  # markdown body after the YAML frontmatter
+    assert body == gold_src
 
 
 @pytest.mark.unit
@@ -67,6 +70,26 @@ def test_showcase_grid_runs_t4_under_both_demo_refs() -> None:
     assert {c.variant for c in cells if c.task_id == "t3_verbatim_anchor"} == {"none"}
 
 
+@pytest.mark.unit
+def test_showcase_grid_clears_the_significance_floor() -> None:
+    # The headline compare needs enough matched (model, effort) pairs for the exact
+    # sign-flip test to reach p <= 0.05 (min p = 2/2^n → n >= 6). Pin the grid to that
+    # floor AND to pairedness, so a grid edit can't silently demote the verdict.
+    from claude_ablation_lab.analyze import MIN_PAIRS_FOR_REAL
+
+    grid = load_grid(REPO / "grids" / "showcase.yaml")
+    t4 = load_task(REPO / "tasks" / "t4_demo_infra.yaml")
+    cells = expand_grid(grid, [t4])
+    configs = {
+        variant: {(c.model, c.effort) for c in cells if c.variant == variant}
+        for variant in (".demo-infra@with-skill", ".demo-infra@without-skill")
+    }
+    with_skill, without_skill = configs.values()
+    assert with_skill == without_skill  # paired: identical config sets under both refs
+    assert len(with_skill) >= MIN_PAIRS_FOR_REAL
+    assert len(with_skill) >= 6  # 2/2^6 = 0.031 — the first n where p <= 0.05 is possible
+
+
 @pytest.mark.integration
 def test_setup_sh_builds_worktreeable_two_ref_repo(tmp_path) -> None:
     dest = tmp_path / "demo-infra"
@@ -98,4 +121,8 @@ def test_setup_sh_builds_worktreeable_two_ref_repo(tmp_path) -> None:
         check=True,
         capture_output=True,
     )
-    assert (wt / ".claude" / "skills" / "project-reference" / "SKILL.md").is_file()
+    skill = wt / ".claude" / "skills" / "project-reference" / "SKILL.md"
+    assert skill.is_file()
+    # The materialized skill must carry the exact reference the task gold scores against —
+    # existence alone would let setup.sh content drift break the A/B silently.
+    assert _t4_gold()["source_text"].strip() in skill.read_text()

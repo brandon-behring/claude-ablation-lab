@@ -137,9 +137,21 @@ def expand_grid(grid: Grid, tasks: list[Task]) -> list[Cell]:
     Iteration order is ``(task, variant, model, effort, epoch)`` — deterministic so
     a resumed sweep visits cells in the same sequence and the ledger is diff-stable.
     """
+    # Vet variant syntax once up front: a malformed spec entry is dropped-and-logged
+    # (matching the effort/compatibility drop semantics) rather than aborting the
+    # whole expansion mid-loop via parse_variant's ValueError.
+    variants: list[str] = []
+    for variant in grid.variants:
+        try:
+            parse_variant(variant)
+        except ValueError as exc:
+            logger.warning("drop malformed variant %r: %s", variant, exc)
+            continue
+        variants.append(variant)
+
     cells: list[Cell] = []
     for task in tasks:
-        for variant in grid.variants:
+        for variant in variants:
             if not _compatible(task, variant):
                 logger.info(
                     "drop %s × %s: infra_repo=%s incompatible with variant",

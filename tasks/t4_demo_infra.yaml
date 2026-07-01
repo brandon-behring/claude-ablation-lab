@@ -1,6 +1,6 @@
 # T4 — demo-infra skill A/B (the public showcase headline).
 # Claude must quote the Project Vega reference, which lives ONLY in the with-skill
-# infra ref (.claude/skills/project-reference.md) — NOT in this prompt. Under
+# infra ref (.claude/skills/project-reference/SKILL.md) — NOT in this prompt. Under
 # with-skill the quotes are exact substrings (anchor ~1.0); under without-skill Claude
 # has never seen Vega and cannot quote it (~0). Infra-sensitive: runs under a
 # demo-infra@ref worktree, never `none`. See examples/demo-infra/.
