@@ -14,7 +14,7 @@ SRC = (
 
 @pytest.mark.golden
 def test_all_expected_quotes_verbatim_score_one() -> None:
-    out = '{"claims":[{"claim":"a","quote":"resampling method"},{"claim":"b","quote":"same size"}]}'
+    out = '{"claims":[{"claim":"a","quote":"a resampling method"},{"claim":"b","quote":"the same size"}]}'
     score = AnchorGrader().grade(output=out, gold={"source_text": SRC, "expected_claims": 2})
     assert score.value == 1.0
     assert score.status == "ok"
@@ -23,9 +23,7 @@ def test_all_expected_quotes_verbatim_score_one() -> None:
 
 @pytest.mark.golden
 def test_partial_substrings_give_fraction() -> None:
-    out = (
-        '{"claims":[{"claim":"a","quote":"resampling method"},{"claim":"b","quote":"NOT PRESENT"}]}'
-    )
+    out = '{"claims":[{"claim":"a","quote":"a resampling method"},{"claim":"b","quote":"NOT PRESENT"}]}'
     score = AnchorGrader().grade(output=out, gold={"source_text": SRC, "expected_claims": 2})
     assert score.value == 0.5
     assert score.details["misses"] == ["NOT PRESENT"]
@@ -34,7 +32,7 @@ def test_partial_substrings_give_fraction() -> None:
 @pytest.mark.golden
 def test_underproduction_penalised_against_expected() -> None:
     # One valid quote but the task expects 5 → 1/5, not a gamed 1/1.
-    out = '{"claims":[{"claim":"a","quote":"resampling method"}]}'
+    out = '{"claims":[{"claim":"a","quote":"a resampling method"}]}'
     score = AnchorGrader().grade(output=out, gold={"source_text": SRC})  # default expected=5
     assert score.value == pytest.approx(0.2)
     assert score.subscores["expected"] == 5.0
@@ -44,12 +42,12 @@ def test_underproduction_penalised_against_expected() -> None:
 @pytest.mark.golden
 def test_overproduction_capped_at_one() -> None:
     quotes = [
-        "resampling method",
-        "same size",
-        "The bootstrap",
-        "percentile interval",
-        "2.5th",
-        "97.5th",
+        "a resampling method",
+        "the same size",
+        "The bootstrap is",
+        "The percentile interval",
+        "the 2.5th and",
+        "and 97.5th percentiles",
     ]
     items = ",".join(f'{{"claim":"c{i}","quote":"{q}"}}' for i, q in enumerate(quotes))
     score = AnchorGrader().grade(
@@ -69,7 +67,7 @@ def test_whitespace_reflow_is_tolerated() -> None:
 
 @pytest.mark.golden
 def test_bare_list_and_preamble_tolerated() -> None:
-    out = 'Sure, here is the JSON:\n[{"claim":"a","quote":"bootstrap"}]\nDone.'
+    out = 'Sure, here is the JSON:\n[{"claim":"a","quote":"The bootstrap is"}]\nDone.'
     score = AnchorGrader().grade(output=out, gold={"source_text": SRC, "expected_claims": 1})
     assert score.value == 1.0
 
@@ -77,7 +75,7 @@ def test_bare_list_and_preamble_tolerated() -> None:
 @pytest.mark.unit
 def test_empty_quotes_count_as_misses_not_perfect() -> None:
     # Empty quotes must NOT match (`"" in source` is True) — they are misses.
-    out = '{"claims":[{"claim":"a","quote":"same size"},{"claim":"b","quote":""}]}'
+    out = '{"claims":[{"claim":"a","quote":"the same size"},{"claim":"b","quote":""}]}'
     score = AnchorGrader().grade(output=out, gold={"source_text": SRC, "expected_claims": 2})
     assert score.value == 0.5
     assert score.subscores["n_verbatim"] == 1.0
@@ -103,14 +101,14 @@ def test_no_claim_structure_is_unparseable() -> None:
 
 @pytest.mark.unit
 def test_empty_source_is_grader_error() -> None:
-    out = '{"claims":[{"claim":"a","quote":"bootstrap"}]}'
+    out = '{"claims":[{"claim":"a","quote":"The bootstrap is"}]}'
     assert AnchorGrader().grade(output=out, gold={}).status == "grader_error"
 
 
 @pytest.mark.unit
 def test_strict_version_differs_from_lenient() -> None:
-    assert AnchorGrader().version == "t3-anchor-v1"
-    assert AnchorGrader(strict=True).version == "t3-anchor-strict-v1"
+    assert AnchorGrader().version == "t3-anchor-v2"
+    assert AnchorGrader(strict=True).version == "t3-anchor-strict-v2"
 
 
 @pytest.mark.golden
@@ -126,7 +124,7 @@ def test_strict_rejects_reflow_that_lenient_accepts() -> None:
 @pytest.mark.golden
 def test_strict_accepts_character_exact_quote() -> None:
     # A byte-for-byte substring still scores 1.0 under strict (it is not just "reject all").
-    out = '{"claims":[{"claim":"a","quote":"resampling method"}]}'
+    out = '{"claims":[{"claim":"a","quote":"a resampling method"}]}'
     score = AnchorGrader(strict=True).grade(
         output=out, gold={"source_text": SRC, "expected_claims": 1}
     )
@@ -140,15 +138,42 @@ def test_registry_resolves_anchor_strict() -> None:
     lenient, strict = get_grader("anchor"), get_grader("anchor_strict")
     assert isinstance(lenient, AnchorGrader) and not lenient.strict
     assert isinstance(strict, AnchorGrader) and strict.strict
-    assert strict.version == "t3-anchor-strict-v1"
+    assert strict.version == "t3-anchor-strict-v2"
 
 
 @pytest.mark.unit
 def test_strict_trims_incidental_edge_whitespace_by_design() -> None:
     # By design: strict is char-exact on the *trimmed* quote — incidental leading/trailing
     # whitespace is not a faithfulness failure (internal reflow still is, tested above).
-    out = '{"claims":[{"claim":"a","quote":"   resampling method   "}]}'
+    out = '{"claims":[{"claim":"a","quote":"   a resampling method   "}]}'
     score = AnchorGrader(strict=True).grade(
         output=out, gold={"source_text": SRC, "expected_claims": 1}
     )
     assert score.value == 1.0
+
+
+@pytest.mark.golden
+def test_short_quotes_never_score() -> None:
+    # The v2 anti-gaming floor: `"the"×3` — or a 2-word phrase the task prompt itself
+    # leaks (the audit's '"Project Vega"×3 scores 1.0' demonstration) — must score 0.
+    out = (
+        '{"claims":[{"claim":"a","quote":"The bootstrap"},'
+        '{"claim":"b","quote":"the"},{"claim":"c","quote":"same size"}]}'
+    )
+    gold = {"source_text": SRC, "expected_claims": 3}
+    assert AnchorGrader().grade(output=out, gold=gold).value == 0.0
+    assert AnchorGrader(strict=True).grade(output=out, gold=gold).value == 0.0
+
+
+@pytest.mark.unit
+def test_duplicate_quotes_count_once() -> None:
+    # Repeating one verbatim quote must not multiply the score: 1 distinct / max(3, 3).
+    out = (
+        '{"claims":[{"claim":"a","quote":"a resampling method"},'
+        '{"claim":"b","quote":"a resampling method"},'
+        '{"claim":"c","quote":"a resampling method"}]}'
+    )
+    score = AnchorGrader().grade(output=out, gold={"source_text": SRC, "expected_claims": 3})
+    assert score.value == pytest.approx(1 / 3)
+    assert score.subscores["n_verbatim"] == 1.0
+    assert score.details["duplicate_quotes"] == 2

@@ -5,8 +5,12 @@
 #               anchor) run here.
 #   - a "<repo>@<ref>" worktree variant for the infra-sensitive T2 (/research-plan).
 #     Point it at a git checkout where the /research-plan skill + research CLAUDE.md
-#     load. If that path is not a worktree-able git repo, the orchestrator logs it
-#     and skips those T2 cells (the rest of the sweep is unaffected).
+#     load. NOTE (2026-07-01 probe): skills load ONLY from the
+#     .claude/skills/<name>/SKILL.md directory form — research_toolkit's flat
+#     .claude/skills/*.md files do NOT load, so convert them (or add
+#     .claude/commands/research-plan.md) BEFORE running T2, or its agentic cells run
+#     and score 0 for infra reasons. If the path is not a worktree-able git repo,
+#     the orchestrator logs it and skips those T2 cells.
 models: [haiku, sonnet, opus]
 efforts: [low, high, max]
 variants:

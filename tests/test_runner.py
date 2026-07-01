@@ -80,6 +80,16 @@ def test_argv_includes_core_flags_and_optionals() -> None:
 
 
 @pytest.mark.unit
+def test_argv_pairs_flags_with_their_values() -> None:
+    # Presence alone would pass with --model and --effort transposed, shipping every
+    # cell to the wrong model with green tests (review finding) — assert the pairing.
+    argv = ClaudeCodeRunner(max_budget_usd=2.5)._argv("p", "sonnet", "high")
+    assert argv[argv.index("--model") + 1] == "sonnet"
+    assert argv[argv.index("--effort") + 1] == "high"
+    assert argv[argv.index("--max-budget-usd") + 1] == "2.5"
+
+
+@pytest.mark.unit
 def test_env_strips_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in AUTH_ENV_STRIP:
         monkeypatch.setenv(key, "sk-should-be-removed")

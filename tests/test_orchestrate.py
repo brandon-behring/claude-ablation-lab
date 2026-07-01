@@ -30,9 +30,9 @@ from claude_ablation_lab.provenance import Provenance
 from claude_ablation_lab.runner import RunResult
 from claude_ablation_lab.task import Task
 
-# Anchor gold: a quote that IS a substring of the source → grades 1.0.
+# Anchor gold: a ≥3-word quote that IS a substring of the source → grades 1.0.
 _SOURCE = "alpha beta gamma delta"
-_CLAIMS = json.dumps({"claims": [{"claim": "c", "quote": "beta gamma"}]})
+_CLAIMS = json.dumps({"claims": [{"claim": "c", "quote": "beta gamma delta"}]})
 
 
 def _ok(*, run_id: str, output: str = _CLAIMS) -> RunResult:

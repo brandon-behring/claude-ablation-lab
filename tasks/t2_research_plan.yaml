@@ -1,7 +1,10 @@
 # T2 — /research-plan generation (representative agentic, agent-loop).
-# Exercises the user's ACTUAL skill infrastructure: run in a workdir where the
+# Exercises the author's ACTUAL skill infrastructure: run in a workdir where the
 # /research-plan skill + research CLAUDE.md load, capture the produced
 # research_plan.md, and grade it with research_toolkit's standalone validator.
+# PREREQUISITE (2026-07-01 probe): the skill must be in the
+# .claude/skills/research-plan/SKILL.md directory form — flat skills do not load
+# (see docs/design/2026-07-01_infra-loading-probe.md).
 #
 # Live agentic execution + artifact capture into the transcript = Phase 3.
 id: t2_research_plan

@@ -21,7 +21,7 @@ install:  ## eval-toolkit (editable if EVAL_TOOLKIT set, else pinned from GitHub
 		echo ">> eval-toolkit: pinned from GitHub ($(EVAL_TOOLKIT_GIT))"; \
 		python -m pip install "$(EVAL_TOOLKIT_GIT)"; \
 	fi
-	python -m pip install -e ".[dev]"
+	python -m pip install -e ".[dev,plot]"
 
 hooks:
 	pre-commit install

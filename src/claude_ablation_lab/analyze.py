@@ -11,13 +11,23 @@ Statistical honesty (the talk's failure-mode #2 and the independent review's
 - The **within-cell** bootstrap CI (``ci_low``/``ci_high`` from the T1 grader, a
   bootstrap over the cell's ~60 examples) is the statistically meaningful interval
   and is surfaced verbatim — *not* conflated with epoch spread.
-- The **shuffled-label leakage gate** is enforced here (not per-cell, which is too
-  noisy): if a classification cell's mean shuffled-label AUROC strays from 0.5 by
-  more than :data:`LEAKAGE_BAND`, the row is flagged — a high score on shuffled
-  labels means the harness/grader is leaking, so trust nothing until it is fixed.
-- ``compare`` reports a variant A/B delta with a **paired bootstrap** CI over the
-  matched (model, effort) configs; "real" means the CI excludes 0. With few
-  configs the CI is wide on purpose.
+- The **shuffled-label control** is checked here (not per-cell, which is too
+  noisy): if a classification cell's shuffled-label AUROC strays from 0.5 by more
+  than :data:`LEAKAGE_BAND`, the row is flagged. Honest scope (2026-07-01
+  methodology audit): because the permutation happens at *grading* time over fixed
+  predictions, this is a **metric-pipeline self-test** — it catches a broken
+  permutation/metric implementation, not gold-leaked-into-prompt leakage (a
+  perfect leak still shuffles to ~0.5). Real leakage defenses are the holdout
+  design and the grader tests.
+- ``compare`` verdicts use an **exact sign-flip permutation test** on the mean
+  per-config delta (all ``2^n`` sign assignments; zero diffs carry no direction
+  and are excluded, reported as ``n_nonzero``): ``real`` means ``p <= 0.05``. The
+  paired-bootstrap CI is reported as *effect-size context only* — the 2026-07-01
+  audit showed a same-sign percentile-bootstrap CI excludes 0 by construction at
+  any magnitude (Type-I ≈ 21% at n=4), so it must never be the verdict rule.
+- ``unparseable`` grades count as their honest ``0.0`` in aggregation: the model
+  produced ungradeable output, which is a *quality* failure. Only infra failures
+  (``run_status != 'ok'``) and ``grader_error`` rows are excluded.
 
 Rows are de-duplicated to the **latest grade per ``run_id``** (so re-grades do not
 double-count) and a cell mixing multiple ``spec_sha`` values is flagged rather
@@ -26,6 +36,7 @@ than silently averaged across different specs.
 
 from __future__ import annotations
 
+import itertools
 import logging
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -43,21 +54,32 @@ __all__ = ["ReportCell", "CompareRow", "report", "compare", "LEAKAGE_BAND"]
 
 logger = logging.getLogger(__name__)
 
-#: max |shuffled-label AUROC − 0.5| over a cell's epochs beyond this flags leakage.
-LEAKAGE_BAND = 0.15
-#: epochs needed before an across-epoch bootstrap CI of the mean is reported.
+#: max |shuffled-label AUROC − 0.5| over a cell's epochs beyond this flags a broken
+#: metric pipeline. The statistic is a mean over 200 permutations (null SD ≈ 0.005 at
+#: n=60), so 0.05 ≈ 11σ — effectively zero false-flag rate while 3× more sensitive to
+#: gross breakage than the original 0.15 (which was ~33σ and could never fire).
+LEAKAGE_BAND = 0.05
+#: epochs needed before an across-epoch interval is reported. NOTE: at n=3 the
+#: percentile bootstrap degenerates to the min–max epoch range (~74% coverage), so the
+#: interval is presented as an "epoch range", not a 95% CI, below 5 epochs.
 MIN_EPOCHS_FOR_CI = 3
-#: matched configs needed before compare may call a delta "real" (Type-I control).
-MIN_PAIRS_FOR_REAL = 4
+#: fewest nonzero paired diffs at which the exact sign-flip test can reach p <= 0.05
+#: (min two-sided p = 2/2^n → n >= 6). Below this, a verdict row is noted underpowered.
+MIN_PAIRS_FOR_REAL = 6
+#: significance level for the exact sign-flip permutation verdict.
+ALPHA = 0.05
 
-# Latest grade per run_id, then keep only runs whose LATEST grade is ok.
+# Latest grade per run_id, then keep runs whose LATEST grade is definitive.
 #
 # Order matters: filtering grade_status BEFORE the window would let a run whose
 # *latest* grade is a grader_error fall back to an older ``ok`` grade — silently
 # reporting a stale score the re-grade meant to replace. So we dedupe first
 # (run_status='ok' only — infra failures never count), pick the most recent grade
-# per run (ts, tie-broken by grader_version for determinism), then drop runs whose
-# surviving grade is not ok.
+# per run (ts, tie-broken by grader_version for determinism), then keep runs whose
+# surviving grade is definitive: ``ok`` OR ``unparseable``. An unparseable grade is
+# a *model quality* failure carrying its honest value=0.0 — excluding it would
+# silently inflate the surviving mean (2026-07-01 methodology audit). Only
+# ``grader_error`` (the grader itself failed; re-gradable) stays out.
 _LATEST_OK = """
 WITH ok_runs AS (
     SELECT * FROM read_json(?, format='newline_delimited')
@@ -68,7 +90,7 @@ ranked AS (
         PARTITION BY run_id ORDER BY ts DESC, grader_version DESC
     ) AS rn FROM ok_runs
 )
-SELECT * FROM ranked WHERE rn = 1 AND grade_status = 'ok'
+SELECT * FROM ranked WHERE rn = 1 AND grade_status IN ('ok', 'unparseable')
 """
 
 
@@ -91,11 +113,20 @@ class ReportCell:
     shuffled_auroc: float | None
     pareto: bool = False
     leakage: bool = False
+    #: unparseable epochs included in the mean at their honest 0.0 (surfaced, not hidden).
+    n_unparseable: int = 0
+    #: distinct grader_versions mixed into this cell (⚠ if > 1: metric definitions differ).
+    n_grader_versions: int = 1
 
 
 @dataclass(frozen=True, slots=True)
 class CompareRow:
-    """A variant A/B delta for one task with a paired-bootstrap "is it real" verdict."""
+    """A variant A/B delta for one task with an exact sign-flip "is it real" verdict.
+
+    ``real`` is ``p_value <= ALPHA`` from the exact sign-flip permutation test; the
+    bootstrap ``ci_low``/``ci_high`` is effect-size context only (never the verdict —
+    a same-sign percentile bootstrap excludes 0 by construction).
+    """
 
     task_id: str
     n_pairs: int
@@ -106,6 +137,10 @@ class CompareRow:
     ci_high: float | None
     real: bool
     note: str = ""
+    #: exact two-sided sign-flip permutation p for the mean delta (None: no nonzero diffs).
+    p_value: float | None = None
+    #: nonzero paired diffs the test ran on (zero diffs carry no directional evidence).
+    n_nonzero: int = 0
 
 
 def _connect() -> duckdb.DuckDBPyConnection:
@@ -127,7 +162,8 @@ def report(ledger_path: Path | str) -> list[ReportCell]:
         return []
     sql = f"""
     SELECT task_id, model, effort, variant, spec_sha, value, cost_usd, latency_s,
-        TRY_CAST(json_extract(subscores, '$.shuffled_auroc') AS DOUBLE) AS shuffled
+        TRY_CAST(json_extract(subscores, '$.shuffled_auroc') AS DOUBLE) AS shuffled,
+        grade_status, grader_version
     FROM ({_LATEST_OK})
     """
     con = _connect()
@@ -154,12 +190,18 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
     n = len(values)
 
     ci_low = ci_high = None
-    if n >= MIN_EPOCHS_FOR_CI:  # a proper bootstrap CI of the across-epoch mean
-        from eval_toolkit.bootstrap import block_bootstrap_on_folds
-
-        ci = block_bootstrap_on_folds(values, n_resamples=2000, rng=42)
-        ci_low, ci_high = float(ci.ci_low), float(ci.ci_high)
-    # Leakage fires on the WORST epoch — averaging would let one leaky run hide.
+    if n >= MIN_EPOCHS_FOR_CI:
+        # An across-epoch interval; at n=3–4 the percentile bootstrap degenerates to
+        # the min–max epoch range (~74% coverage at n=3), so downstream presentation
+        # labels it "epoch range", not a 95% CI, below 5 epochs.
+        try:
+            from eval_toolkit.bootstrap import block_bootstrap_on_folds
+        except ImportError:  # optional stats dep absent → no interval, not a crash
+            logger.warning("eval_toolkit missing — across-epoch interval omitted")
+        else:
+            ci = block_bootstrap_on_folds(values, n_resamples=2000, rng=42)
+            ci_low, ci_high = float(ci.ci_low), float(ci.ci_high)
+    # The self-test fires on the WORST epoch — averaging would let one broken run hide.
     max_dev = max((abs(s - 0.5) for s in shuffles), default=None)
     return ReportCell(
         task_id=task_id,
@@ -176,6 +218,8 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
         ci_high=ci_high,
         shuffled_auroc=(sum(shuffles) / len(shuffles)) if shuffles else None,
         leakage=max_dev is not None and max_dev > LEAKAGE_BAND,
+        n_unparseable=sum(1 for row in group if row[9] == "unparseable"),
+        n_grader_versions=len({row[10] for row in group}),
     )
 
 
@@ -196,16 +240,16 @@ def _mark_pareto(cells: list[ReportCell]) -> list[ReportCell]:
 
 
 def compare(ledger_path: Path | str, variant_a: str, variant_b: str) -> list[CompareRow]:
-    """Per-task A→B delta with a paired-bootstrap CI over matched (model, effort) configs.
+    """Per-task A→B delta with an exact sign-flip verdict over matched (model, effort) configs.
 
     For each task, every (model, effort) present under *both* variants contributes
     one paired observation (epochs averaged within a config). The delta is
-    ``mean_b − mean_a``; the CI is a bootstrap over those per-config differences.
-    ``real`` is ``True`` only when the CI excludes 0 *and* there are ≥
-    :data:`MIN_PAIRS_FOR_REAL` configs: with 2–3 same-sign diffs the bootstrap CI
-    excludes 0 by construction (a tautology, not evidence), so a smaller n yields
-    ``real=False`` with an explanatory note. No multiple-comparison correction is
-    applied across tasks (v1 exploratory) — read several "real" verdicts with care.
+    ``mean_b − mean_a``. ``real`` is decided by the exact sign-flip permutation test
+    (``p <= ALPHA`` over the nonzero diffs; min possible p is ``2/2^n``, so ``real``
+    is mechanically unreachable below :data:`MIN_PAIRS_FOR_REAL` nonzero pairs and
+    the row says so). The paired-bootstrap CI is effect-size context only. No
+    multiple-comparison correction is applied across tasks (v1 exploratory) — read
+    several "real" verdicts with care.
     """
     path = Path(ledger_path)
     if not path.exists():
@@ -237,13 +281,42 @@ def compare(ledger_path: Path | str, variant_a: str, variant_b: str) -> list[Com
     ]
 
 
+def _sign_flip_p(diffs: np.ndarray) -> tuple[float | None, int]:
+    """Exact two-sided sign-flip permutation p-value for ``mean(diffs)``.
+
+    Enumerates all ``2^n`` sign assignments of the *nonzero* diffs (exact at the tiny
+    n this harness produces; Monte-Carlo above 16 to bound memory). Zero diffs carry
+    no directional evidence, so they are excluded and ``n_nonzero`` reported — the
+    consulted-on convention that also keeps quantized/tied scores honest. Returns
+    ``(None, 0)`` when every diff is zero (no evidence either way).
+    """
+    nonzero = diffs[diffs != 0.0]
+    n = int(nonzero.size)
+    if n == 0:
+        return None, 0
+    observed = abs(float(nonzero.mean()))
+    if n <= 16:
+        signs = np.array(list(itertools.product((1.0, -1.0), repeat=n)))
+    else:  # pragma: no cover — grids here never exceed ~9 pairs
+        signs = np.random.default_rng(42).choice((1.0, -1.0), size=(100_000, n))
+    flipped = np.abs((signs * nonzero).mean(axis=1))
+    # >= with an fp tolerance so the observed assignment always counts itself.
+    return float(np.mean(flipped >= observed - 1e-12)), n
+
+
 def _compare_task(
     task_id: str,
     by_config: dict[tuple[str, str, str], dict[str, float]],
     variant_a: str,
     variant_b: str,
 ) -> CompareRow:
-    """Build one :class:`CompareRow` from the paired per-config means of a task."""
+    """Build one :class:`CompareRow` from the paired per-config means of a task.
+
+    The verdict is the exact sign-flip permutation test (``real = p <= ALPHA``); the
+    bootstrap CI is effect-size context only. A same-sign percentile-bootstrap CI
+    excludes 0 by construction at any magnitude (measured Type-I ≈ 21% at n=4), so
+    it must never decide ``real`` — the 2026-07-01 methodology audit's core fix.
+    """
     pairs = [
         (v[variant_a], v[variant_b])
         for (t, _, _), v in by_config.items()
@@ -255,36 +328,38 @@ def _compare_task(
     n = len(diffs)
     mean_a, mean_b, delta = float(a_vals.mean()), float(b_vals.mean()), float(diffs.mean())
 
-    if n < MIN_PAIRS_FOR_REAL:
-        # Too few configs: a same-sign 2–3 diff bootstrap excludes 0 by construction,
-        # so report the CI for context but never call it "real".
-        ci = None
-        if n >= 2:  # lazy import keeps eval_toolkit off analyze's module-import path
+    p_value, n_nonzero = _sign_flip_p(diffs)
+
+    ci_low = ci_high = None
+    if n >= 2:  # bootstrap CI as effect-size context (lazy optional import)
+        try:
             from eval_toolkit.bootstrap import block_bootstrap_on_folds
-
+        except ImportError:
+            logger.warning("eval_toolkit missing — effect-size CI omitted")
+        else:
             ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42)
-        return CompareRow(
-            task_id=task_id,
-            n_pairs=n,
-            mean_a=mean_a,
-            mean_b=mean_b,
-            delta=delta,
-            ci_low=None if ci is None else float(ci.ci_low),
-            ci_high=None if ci is None else float(ci.ci_high),
-            real=False,
-            note=f"n={n} configs — below the >={MIN_PAIRS_FOR_REAL} floor for a verdict",
-        )
-    from eval_toolkit.bootstrap import block_bootstrap_on_folds
+            ci_low, ci_high = float(ci.ci_low), float(ci.ci_high)
 
-    ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42)
+    notes: list[str] = []
+    if p_value is None:
+        notes.append("all diffs zero — no directional evidence")
+    elif n_nonzero < MIN_PAIRS_FOR_REAL:
+        notes.append(
+            f"n_nonzero={n_nonzero} < {MIN_PAIRS_FOR_REAL} — p cannot reach {ALPHA:g} "
+            f"(min p = {2 / 2**n_nonzero:g})"
+        )
+    if ci_low is not None and ci_low == ci_high:
+        notes.append("CI degenerate (all diffs identical)")
     return CompareRow(
         task_id=task_id,
         n_pairs=n,
         mean_a=mean_a,
         mean_b=mean_b,
         delta=delta,
-        ci_low=float(ci.ci_low),
-        ci_high=float(ci.ci_high),
-        real=ci.ci_low > 0.0 or ci.ci_high < 0.0,  # interval excludes 0
-        note="exploratory (small n)",
+        ci_low=ci_low,
+        ci_high=ci_high,
+        real=p_value is not None and p_value <= ALPHA,
+        note="; ".join(notes) if notes else "exact sign-flip test",
+        p_value=p_value,
+        n_nonzero=n_nonzero,
     )

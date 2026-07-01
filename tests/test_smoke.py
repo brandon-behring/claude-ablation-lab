@@ -24,8 +24,11 @@ def test_cli_version_command() -> None:
 
 
 @pytest.mark.unit
-def test_cli_exposes_expected_commands() -> None:
-    result = runner.invoke(app, ["--help"])
-    assert result.exit_code == 0
-    for cmd in ("estimate", "run", "regrade", "report", "compare"):
-        assert cmd in result.stdout
+def test_cli_exposes_exactly_the_expected_commands() -> None:
+    # Loud set equality derived from the app itself — an `in`-membership list rotted
+    # silently once already (`plot` shipped without this test noticing).
+    registered = {
+        cmd.name or cmd.callback.__name__  # type: ignore[union-attr]
+        for cmd in app.registered_commands
+    }
+    assert registered == {"version", "run", "regrade", "estimate", "report", "compare", "plot"}

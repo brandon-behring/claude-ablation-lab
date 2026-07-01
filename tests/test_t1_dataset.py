@@ -40,9 +40,14 @@ def test_build_prompt_has_one_contiguous_msg_per_row() -> None:
     for k in range(10):  # exactly one <msg idx=k> per row, idx 0..n-1 contiguous
         assert prompt.count(f"<msg idx={k}>") == 1
     assert "<msg idx=10>" not in prompt  # no off-by-one 11th message
-    # every message is closed; >= (not ==) tolerates the delimiter-explanation prose
-    # line, which literally shows "<msg idx=N> ... </msg>".
-    assert prompt.count("</msg>") >= 10
+    # Exact structure (the earlier `>= 10` masked a missing closer — review consensus):
+    # every real opener is immediately paired with a closer after its payload line,
+    # plus exactly one `</msg>` inside the delimiter-explanation prose line.
+    import re
+
+    blocks = re.findall(r"<msg idx=(\d+)>\n.*?\n</msg>", prompt, flags=re.DOTALL)
+    assert [int(b) for b in blocks] == list(range(10))
+    assert prompt.count("</msg>") == 11  # 10 real closers + the explanation line's literal
 
 
 @pytest.mark.unit
@@ -70,5 +75,8 @@ def test_holdout_path_honors_env_override(monkeypatch: pytest.MonkeyPatch) -> No
         reloaded = importlib.reload(t1)
         assert str(reloaded.DEFAULT_HOLDOUT_PATH) == "/tmp/custom/holdout.parquet"
     finally:
-        monkeypatch.delenv("T1_HOLDOUT_PATH", raising=False)
-        importlib.reload(t1)  # restore the module-level default for other tests
+        # undo() restores the PRE-TEST environment BEFORE the reload — a plain delenv
+        # would bake the fallback default in for the rest of the session on machines
+        # where the user genuinely has T1_HOLDOUT_PATH set (review finding).
+        monkeypatch.undo()
+        importlib.reload(t1)

@@ -19,6 +19,10 @@ line-wrapping is not penalised, while fabricated/altered content still fails. Th
 ``strict=True`` variant (grader ``anchor_strict``) instead requires a character-exact
 substring — a stricter faithfulness bar whose gap from the lenient score is itself a
 signal. (Plain substring, not SHA256 — hashing buys nothing at paragraph scale.)
+
+Anti-gaming floor (v2): a quote counts only if it is at least :data:`MIN_QUOTE_WORDS`
+words, and only *distinct* verbatim quotes count — otherwise ``"the"`` repeated, or a
+short phrase leaked by the task prompt itself, scores a perfect 1.0.
 """
 
 from __future__ import annotations
@@ -32,10 +36,14 @@ from claude_ablation_lab.graders._parse import lenient_json
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-__all__ = ["AnchorGrader"]
+__all__ = ["AnchorGrader", "MIN_QUOTE_WORDS"]
 
 _CLAIM_LIST_KEYS = ("claims", "anchors", "extractions")
 _DEFAULT_EXPECTED_CLAIMS = 5
+#: Gaming floor (2026-07-01 methodology audit): without it, `"the"×3` — or a 2-word
+#: phrase the task prompt itself leaks, like "Project Vega" — scores 1.0. A quote
+#: counts only at >= this many words, and only DISTINCT verbatim quotes count.
+MIN_QUOTE_WORDS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +61,9 @@ class AnchorGrader:
 
     @property
     def version(self) -> str:
-        return "t3-anchor-strict-v1" if self.strict else "t3-anchor-v1"
+        # v2: the >= MIN_QUOTE_WORDS floor + distinct-quote counting (audit fix); a
+        # behavior change is a version bump so stored rows re-grade under a new key.
+        return "t3-anchor-strict-v2" if self.strict else "t3-anchor-v2"
 
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
         """Score ``output`` against ``gold["source_text"]`` (char-exact if ``strict``)."""
@@ -70,19 +80,32 @@ class AnchorGrader:
         # not a faithfulness signal. ``strict`` still requires the trimmed quote to be a
         # character-exact substring, so it catches internal reflow — only the edges are lenient.
         quotes = [str(claim.get("quote", "")).strip() for claim in claims]
-        verbatim = [q for q in quotes if q and self._prep(q) in source]
-        misses = [q for q in quotes if not (q and self._prep(q) in source)]
+        seen: set[str] = set()
+        misses: list[str] = []
+        duplicates = 0
+        for quote in quotes:
+            prepped = self._prep(quote)
+            hit = bool(quote) and len(quote.split()) >= MIN_QUOTE_WORDS and prepped in source
+            if not hit:
+                misses.append(quote)  # absent, too short, or empty — all score nothing
+            elif prepped in seen:
+                duplicates += 1  # repeating one verbatim quote earns nothing extra
+            else:
+                seen.add(prepped)
 
         denominator = max(expected, len(claims))
-        value = len(verbatim) / denominator if denominator else 0.0
+        value = len(seen) / denominator if denominator else 0.0
+        details: dict[str, Any] = {"misses": misses, "shortfall": max(0, expected - len(claims))}
+        if duplicates:
+            details["duplicate_quotes"] = duplicates
         return Score(
             value=value,
             subscores={
                 "n_claims": float(len(claims)),
-                "n_verbatim": float(len(verbatim)),
+                "n_verbatim": float(len(seen)),
                 "expected": float(expected),
             },
-            details={"misses": misses, "shortfall": max(0, expected - len(claims))},
+            details=details,
         )
 
     def _prep(self, text: str) -> str:
