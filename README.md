@@ -13,17 +13,17 @@ The goal is not to reproduce Anthropic's published base numbers — it's to meas
 
 ## Setup
 
-**Prerequisites:** Python **3.13+**, the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI (logged in to your subscription), and a virtualenv tool ([`uv`](https://docs.astral.sh/uv/) recommended).
+**Prerequisites:** Python **3.13+**, `git`, the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI (logged in to your subscription), and a virtualenv tool ([`uv`](https://docs.astral.sh/uv/) recommended).
 
 ```bash
-uv venv --python 3.13 && source .venv/bin/activate   # or: python3.13 -m venv .venv
-make install      # eval-toolkit (from GitHub) + this package [dev]
+uv venv --python 3.13 --seed && source .venv/bin/activate   # --seed puts pip in the venv; or: python3.13 -m venv .venv
+make install      # eval-toolkit (pinned, from GitHub) + this package [dev]
 make hooks        # optional: pre-commit (ruff/black @commit, mypy @pre-push)
 ```
 
 Two dependencies are **public but not on PyPI**:
 
-- **[eval-toolkit](https://github.com/brandon-behring/eval-toolkit)** — bootstrap CIs + AUROC behind the graders and `report`/`compare`. `make install` fetches it from GitHub; for editable dev pass a local checkout: `EVAL_TOOLKIT=~/eval-toolkit make install`.
+- **[eval-toolkit](https://github.com/brandon-behring/eval-toolkit)** — bootstrap CIs + AUROC behind the graders and `report`/`compare`. `make install` fetches a pinned release from GitHub; for editable dev pass a local checkout: `EVAL_TOOLKIT=~/eval-toolkit make install`.
 - **[research_toolkit](https://github.com/brandon-behring/research_toolkit)** — only for task **T2** (its `/research-plan` validator, and as an infra-variant worktree). Optional — T1/T3 are infra-agnostic and run without it.
 
 ## Quickstart
