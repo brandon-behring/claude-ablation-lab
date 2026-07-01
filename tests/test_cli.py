@@ -104,3 +104,64 @@ def test_compare_renders_or_reports_no_overlap(tmp_path) -> None:
     result = cli.invoke(app, ["compare", str(led), "--a", "repo@a", "--b", "repo@b"])
     assert result.exit_code == 0
     assert "no task ran under both" in result.stdout  # only A present
+
+
+def _estimate(status: str) -> object:
+    """A canned Estimate; ``estimate`` imports estimate_sweep at call time so we stub it."""
+    from claude_ablation_lab import orchestrate
+
+    return orchestrate.Estimate(
+        n_cells=4,
+        calibration_label="t3_verbatim_anchor/haiku/low",
+        calibration_status=status,
+        cell_cost_usd=0.01,
+        cell_latency_s=5.0,
+        cell_turns=1,
+        cell_input_tokens=100,
+        cell_output_tokens=50,
+        projected_cost_usd=0.04,
+        projected_wall_clock_s=20.0,
+        projected_turns=4,
+        projected_input_tokens=400,
+        projected_output_tokens=200,
+    )
+
+
+@pytest.mark.unit
+def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    from claude_ablation_lab import orchestrate
+
+    monkeypatch.setattr(orchestrate, "estimate_sweep", lambda *a, **k: _estimate("ok"))
+    result = cli.invoke(
+        app,
+        [
+            "estimate",
+            str(REPO / "tasks"),
+            str(REPO / "grids" / "smoke.yaml"),
+            "--task",
+            "t3_verbatim_anchor",
+        ],
+    )
+    assert result.exit_code == 0
+    # _print_estimate rendered the per-cell → projected table
+    assert "input tokens" in result.stdout and "wall-clock" in result.stdout
+
+
+@pytest.mark.unit
+def test_estimate_bad_calibration_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "claude_ablation_lab.orchestrate.estimate_sweep",
+        lambda *a, **k: _estimate("halted"),
+    )
+    result = cli.invoke(
+        app,
+        [
+            "estimate",
+            str(REPO / "tasks"),
+            str(REPO / "grids" / "smoke.yaml"),
+            "--task",
+            "t3_verbatim_anchor",
+        ],
+    )
+    assert result.exit_code == 2
+    assert "unreliable" in result.stdout

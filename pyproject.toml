@@ -23,9 +23,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 # NOTE: `eval-toolkit` is a hard dependency for the graders/stats but is NOT on
-# PyPI — it is installed editable from the local sibling repo by `make install`
-# (`pip install -e ~/Claude/eval-toolkit`). It is intentionally omitted here so
-# `pip install -e .` does not try (and fail) to resolve it from an index.
+# PyPI — `make install` fetches a pinned release from GitHub (or an editable local
+# checkout via `EVAL_TOOLKIT=`). It is intentionally omitted here so `pip install
+# -e .` does not try (and fail) to resolve it from an index.
 dependencies = [
     "typer>=0.12",
     "rich>=13.0",
@@ -112,3 +112,6 @@ branch = true
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover", "raise NotImplementedError", "if TYPE_CHECKING:"]
+# Machine floor — a regression ratchet (current ~94%). coverage.py supports only one
+# project-wide floor; the per-tier targets (graders/stats >=90%) stay review-enforced.
+fail_under = 90

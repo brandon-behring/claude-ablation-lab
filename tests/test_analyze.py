@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from claude_ablation_lab.analyze import compare, report
-from claude_ablation_lab.ledger import LedgerRow, append_row
+pytest.importorskip("eval_toolkit")  # report/compare import eval_toolkit lazily at call time
+
+from claude_ablation_lab.analyze import compare, report  # noqa: E402
+from claude_ablation_lab.ledger import LedgerRow, append_row  # noqa: E402
 
 
 def _row(

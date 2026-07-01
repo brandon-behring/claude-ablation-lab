@@ -1,5 +1,9 @@
 # claude-ablation-lab
 
+[![CI](https://github.com/brandon-behring/claude-ablation-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/brandon-behring/claude-ablation-lab/actions/workflows/ci.yml)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A personal **model × thinking-effort × config** ablation/regression harness for **Claude Code**, run headless against *your own* use cases.
 
 The goal is not to reproduce Anthropic's published base numbers — it's to measure how well Claude performs on **your tasks, inside your infrastructure**, so you can later prove whether a change to your `CLAUDE.md` / skills / MCP / prompts **actually helps** ("is the difference real?"). Inspired by the Anthropic talk *"Picking the right model"* (build a small private eval; optimize cheapest-per-*successful-outcome*; read your transcripts; separate infra failures from model failures).
@@ -48,7 +52,7 @@ ablation regrade  tasks/ --ledger results/ledger.jsonl           # re-score stor
 
 ## Status
 
-Alpha — Development phase. **Build phases 0–5 complete**: runner + worktree isolation, 3 graders (run/grade decoupled), grid + JSONL ledger + orchestrator (resumable, provenance-stamped, back-off/halt), DuckDB `report`/`compare`, and `estimate`. Verified live end-to-end on a 4-cell smoke (run → grade → ledger → report → resume). The focused v1 sweep is user-driven (it spends real rate-limit headroom). See `CLAUDE.md` for conventions and the approved plan at `~/.claude/plans/on-one-of-the-lexical-star.md`; per-phase reviews in `docs/design/`.
+Alpha — Development phase. **Build phases 0–5 complete**: runner + worktree isolation, 3 graders (run/grade decoupled), grid + JSONL ledger + orchestrator (resumable, provenance-stamped, back-off/halt), DuckDB `report`/`compare`, and `estimate`. Verified live end-to-end on a 4-cell smoke (run → grade → ledger → report → resume). The focused v1 sweep is user-driven (it spends real rate-limit headroom). See `CLAUDE.md` for conventions, [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how the numbers stay honest, and per-phase reviews in [`docs/design/`](docs/design/).
 
 ## License
 
