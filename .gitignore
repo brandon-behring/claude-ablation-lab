@@ -33,7 +33,8 @@ coverage.xml
 .claude/settings.local.json
 
 # --- harness data (results + gold are reproducible / large; not source) ---
-results/            # JSONL ledgers + results/transcripts/*.json
-data/               # copied/symlinked gold datasets
-.worktrees/         # scratch git worktrees materialized per (infra_repo, ref)
+# results/ = JSONL ledgers + results/transcripts/*.json · data/ = copied/symlinked gold · .worktrees/ = scratch worktrees per (infra_repo, ref)
+results/
+data/
+.worktrees/
 *.duckdb
