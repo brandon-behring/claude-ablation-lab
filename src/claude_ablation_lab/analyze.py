@@ -244,8 +244,6 @@ def _compare_task(
     variant_b: str,
 ) -> CompareRow:
     """Build one :class:`CompareRow` from the paired per-config means of a task."""
-    from eval_toolkit.bootstrap import block_bootstrap_on_folds
-
     pairs = [
         (v[variant_a], v[variant_b])
         for (t, _, _), v in by_config.items()
@@ -260,7 +258,11 @@ def _compare_task(
     if n < MIN_PAIRS_FOR_REAL:
         # Too few configs: a same-sign 2–3 diff bootstrap excludes 0 by construction,
         # so report the CI for context but never call it "real".
-        ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42) if n >= 2 else None
+        ci = None
+        if n >= 2:  # lazy import keeps eval_toolkit off analyze's module-import path
+            from eval_toolkit.bootstrap import block_bootstrap_on_folds
+
+            ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42)
         return CompareRow(
             task_id=task_id,
             n_pairs=n,
@@ -272,6 +274,8 @@ def _compare_task(
             real=False,
             note=f"n={n} configs — below the >={MIN_PAIRS_FOR_REAL} floor for a verdict",
         )
+    from eval_toolkit.bootstrap import block_bootstrap_on_folds
+
     ci = block_bootstrap_on_folds(diffs, n_resamples=2000, rng=42)
     return CompareRow(
         task_id=task_id,

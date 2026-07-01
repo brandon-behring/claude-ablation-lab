@@ -38,10 +38,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      # eval-toolkit (graders/stats dep) is not on PyPI; clone the sibling repo for
-      # the eval-toolkit-dependent tests. Tests that need it are marked and skip if absent.
-      - name: Install eval-toolkit (best-effort)
-        run: pip install "git+https://github.com/brandon-behring/eval-toolkit.git" || echo "eval-toolkit unavailable; dependent tests will skip"
+      # eval-toolkit (graders/stats) is a hard dependency not on PyPI, and the coverage
+      # floor below assumes the full suite runs — so install it as REQUIRED + pinned (a
+      # transient failure should red CI, not silently drop coverage under the floor).
+      - name: Install eval-toolkit (required, pinned)
+        run: pip install "git+https://github.com/brandon-behring/eval-toolkit.git@v1.12.0"
       - run: pip install -e ".[dev]"
       - name: Pytest
         run: pytest --cov=claude_ablation_lab --cov-report=term-missing --cov-fail-under=90
