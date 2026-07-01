@@ -12,6 +12,7 @@ The ``Agg`` backend is forced at import so this works on a headless box / in CI.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,8 +36,14 @@ _EFFORT_ORDER = {"low": 0, "high": 1, "max": 2}
 _EFFORT_MARKERS = ["o", "s", "^", "D", "v", "P"]
 
 
-def _effort_rank(effort: str) -> int:
-    return _EFFORT_ORDER.get(effort, len(_EFFORT_ORDER))
+def _effort_rank(effort: str) -> tuple[int, str]:
+    """Sort key: known efforts in order, unknown ones alphabetical after (deterministic)."""
+    return (_EFFORT_ORDER.get(effort, len(_EFFORT_ORDER)), effort)
+
+
+def _slug(name: str) -> str:
+    """Filename-safe task id — path separators and shell-noise never reach savefig."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", name) or "task"
 
 
 def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
@@ -51,25 +58,30 @@ def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
     if not task_cells:
         ax.set_title(f"{task}: no cells")
         return fig
-    models = sorted({c.model for c in task_cells})
+    # One colour per (model, variant) series — a multi-variant ledger (the A/B showcase)
+    # must not render two variants of one model indistinguishably (review consensus).
+    variants = {c.variant for c in task_cells}
+    series = sorted({(c.model, c.variant) for c in task_cells})
     efforts = sorted({c.effort for c in task_cells}, key=_effort_rank)
     cmap = plt.get_cmap("tab10")
-    color_of = {m: cmap(i % 10) for i, m in enumerate(models)}
+    color_of = {s: cmap(i % 10) for i, s in enumerate(series)}
+    label_of = {s: s[0] if len(variants) == 1 else f"{s[0]} @ {s[1]}" for s in series}
     marker_of = {e: _EFFORT_MARKERS[i % len(_EFFORT_MARKERS)] for i, e in enumerate(efforts)}
 
     for c in task_cells:
         yerr = None
         if c.ci_low is not None and c.ci_high is not None:
             yerr = [[c.mean_value - c.ci_low], [c.ci_high - c.mean_value]]
+        key = (c.model, c.variant)
         ax.errorbar(
             c.mean_cost,
             c.mean_value,
             yerr=yerr,
             marker=marker_of[c.effort],
             markersize=11 if c.pareto else 7,
-            markerfacecolor=color_of[c.model] if c.pareto else "white",
-            markeredgecolor=color_of[c.model],
-            color=color_of[c.model],
+            markerfacecolor=color_of[key] if c.pareto else "white",
+            markeredgecolor=color_of[key],
+            color=color_of[key],
             ecolor="gray",
             elinewidth=1,
             capsize=3,
@@ -99,14 +111,18 @@ def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
             zorder=2,
         )
 
-    model_handles = [
-        Line2D([], [], marker="o", linestyle="none", color=color_of[m], label=m) for m in models
+    series_handles = [
+        Line2D([], [], marker="o", linestyle="none", color=color_of[s], label=label_of[s])
+        for s in series
     ]
     effort_handles = [
         Line2D([], [], marker=marker_of[e], linestyle="none", color="gray", label=e)
         for e in efforts
     ]
-    ax.add_artist(ax.legend(handles=model_handles, title="model", loc="lower right", fontsize=8))
+    series_title = "model" if len(variants) == 1 else "model @ variant"
+    ax.add_artist(
+        ax.legend(handles=series_handles, title=series_title, loc="lower right", fontsize=8)
+    )
     ax.legend(handles=effort_handles, title="effort", loc="upper left", fontsize=8)
     ax.set_xlabel("mean cost ($ / cell)")
     ax.set_ylabel("mean quality")
@@ -207,7 +223,7 @@ def render_all(
             ("pareto", pareto_scatter(cells, task=task)),
             ("effort", effort_curves(cells, task=task)),
         ):
-            path = out / f"{task}_{name}.{fmt}"
+            path = out / f"{_slug(task)}_{name}.{fmt}"
             fig.savefig(path, dpi=120, bbox_inches="tight")
             plt.close(fig)
             written.append(path)

@@ -68,11 +68,18 @@ def spec_sha(prompt: str, json_schema: dict[str, Any] | None, gold: Mapping[str,
 
 
 def _prepare_classification(task: Task) -> Prepared:
-    """T1: seeded balanced subsample → batched prompt + verdict schema + idx→label gold."""
+    """T1: seeded balanced subsample → batched prompt + verdict schema + idx→label gold.
+
+    Holdout resolution order: ``$T1_HOLDOUT_PATH`` (the documented escape hatch — it
+    must beat a task-pinned path, or the override is dead exactly when the pinned
+    default doesn't exist on this machine), then ``params.gold_parquet``, then the
+    package default.
+    """
     from claude_ablation_lab import t1_dataset
 
     params = task.params
-    raw_path = params.get("gold_parquet")
+    env_path = os.environ.get("T1_HOLDOUT_PATH")
+    raw_path = env_path or params.get("gold_parquet")
     path = Path(os.path.expanduser(str(raw_path))) if raw_path else t1_dataset.DEFAULT_HOLDOUT_PATH
     frame = t1_dataset.subsample(
         t1_dataset.load_holdout(path),

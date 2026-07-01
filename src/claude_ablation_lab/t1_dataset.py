@@ -4,10 +4,11 @@ classification prompt + JSON schema, and emit the gold label map.
 The model under test classifies a *batch* of numbered messages in one call
 (``--json-schema`` → a verdict array); this keeps T1 to one request per cell.
 The injection *definition* below is a standard single-word (injection/safe)
-classification prompt. The gold is a balanced ``text`` + ``label`` split
-(``1`` = injection) from the public, MIT-licensed
-``prompt-injection-detection-prototype`` repo (examples drawn from public sets:
-deepset / hackaprompt / lakera). Override the path with ``$T1_HOLDOUT_PATH``.
+classification prompt. The gold is any balanced ``text`` + ``label`` parquet
+(``1`` = injection) — e.g. a split from the public, MIT-licensed
+``prompt-injection-detection-prototype`` repo (deepset / hackaprompt / lakera
+examples). Point at yours with ``$T1_HOLDOUT_PATH`` (wins over everything) or
+``params.gold_parquet``; the default is the gitignored ``data/t1_holdout.parquet``.
 
 Live elicitation happens in Phase 3; this module supplies the deterministic,
 seed-stable inputs and is unit-tested on a synthetic frame.
@@ -32,15 +33,9 @@ __all__ = [
     "build_prompt",
 ]
 
-DEFAULT_HOLDOUT_PATH = Path(
-    os.environ.get(
-        "T1_HOLDOUT_PATH",
-        os.path.expanduser(
-            "~/Claude/prompt-injection-detection-prototype"
-            "/tests/fixtures/processed/fold-0/seed-42/train.parquet"
-        ),
-    )
-)
+# $T1_HOLDOUT_PATH wins; the fallback is a neutral, gitignored in-repo location so a
+# fresh clone fails with an obvious local path, never a stranger's machine layout.
+DEFAULT_HOLDOUT_PATH = Path(os.environ.get("T1_HOLDOUT_PATH", "data/t1_holdout.parquet"))
 REQUIRED_COLUMNS = ("text", "label")
 
 # Standard injection-classification definition (a single-word injection/safe

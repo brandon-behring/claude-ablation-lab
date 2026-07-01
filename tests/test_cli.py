@@ -106,6 +106,23 @@ def test_compare_renders_or_reports_no_overlap(tmp_path) -> None:
     assert "no task ran under both" in result.stdout  # only A present
 
 
+@pytest.mark.unit
+def test_compare_renders_a_real_verdict(tmp_path) -> None:
+    # The headline table (_print_compare) — 6 same-sign pairs → exact p = 0.031 → "yes".
+    led = tmp_path / "ledger.jsonl"
+    configs = [(m, e) for m in ("haiku", "sonnet", "opus") for e in ("low", "high")]
+    for i, (model, effort) in enumerate(configs):
+        _ledger_row(
+            led, run_id=f"a{i}", task_id="t4", variant="d@a", model=model, effort=effort, value=0.2
+        )
+        _ledger_row(
+            led, run_id=f"b{i}", task_id="t4", variant="d@b", model=model, effort=effort, value=0.9
+        )
+    result = cli.invoke(app, ["compare", str(led), "--a", "d@a", "--b", "d@b"])
+    assert result.exit_code == 0
+    assert "yes" in result.stdout and "0.031" in result.stdout
+
+
 def _estimate(status: str) -> object:
     """A canned Estimate; ``estimate`` imports estimate_sweep at call time so we stub it."""
     from claude_ablation_lab import orchestrate
@@ -130,8 +147,23 @@ def _estimate(status: str) -> object:
 @pytest.mark.unit
 def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
     from claude_ablation_lab import orchestrate
+    from claude_ablation_lab.runner import ClaudeCodeRunner
 
-    monkeypatch.setattr(orchestrate, "estimate_sweep", lambda *a, **k: _estimate("ok"))
+    captured: dict[str, object] = {}
+
+    def _stub(tasks, grid, *, runner, **kw):  # capture the seam — a swallowing lambda
+        captured["task_ids"] = [t.id for t in tasks]  # let a transposed argument pass
+        captured["models"] = grid.models
+        return _estimate("ok")
+
+    monkeypatch.setattr(orchestrate, "estimate_sweep", _stub)
+    # Belt-and-braces: if a refactor ever makes the call-time import miss the patch,
+    # fail loudly instead of silently invoking the real `claude` binary from pytest.
+    monkeypatch.setattr(
+        ClaudeCodeRunner,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("live claude call escaped")),
+    )
     result = cli.invoke(
         app,
         [
@@ -145,6 +177,8 @@ def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0
     # _print_estimate rendered the per-cell → projected table
     assert "input tokens" in result.stdout and "wall-clock" in result.stdout
+    assert captured["task_ids"] == ["t3_verbatim_anchor"]  # the CLI→orchestrate seam
+    assert captured["models"] == ("haiku", "sonnet")
 
 
 @pytest.mark.unit

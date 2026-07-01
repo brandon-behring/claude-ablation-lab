@@ -60,6 +60,10 @@ logger = logging.getLogger(__name__)
 
 _PREVIEW_CHARS = 500
 _BACKOFF_CAP_S = 60.0
+#: consecutive infra_error/timeout runs before the sweep halts — a broken environment
+#: (dead network, revoked auth, missing binary) must not burn every remaining cell
+#: serially at up to timeout_s each. Transient throttles have their own back-off path.
+MAX_CONSECUTIVE_INFRA = 5
 
 
 class SweepHaltedError(RuntimeError):
@@ -459,6 +463,7 @@ def run_sweep(
     tally = _Tally()
     halted = False
     halt_reason: str | None = None
+    consecutive_infra = 0  # circuit breaker: see MAX_CONSECUTIVE_INFRA
     try:
         for cell in cells:
             grader = graders[cell.task_id]
@@ -552,8 +557,19 @@ def run_sweep(
                 ok_rows[run_key] = row
                 tally.ran += 1
                 tally.bump_grade(score.status)
+                consecutive_infra = 0
             else:
                 tally.failed += 1
+                if run_result.status in ("infra_error", "timeout"):
+                    consecutive_infra += 1
+                    if consecutive_infra >= MAX_CONSECUTIVE_INFRA:
+                        halted = True
+                        halt_reason = (
+                            f"{consecutive_infra} consecutive infra failures — the "
+                            "environment appears broken; fix it and re-run (resumable)"
+                        )
+                        logger.error("sweep halted: %s", halt_reason)
+                        break
     finally:
         if cleanup:
             _cleanup(worktrees, neutral_dir if owns_neutral else None)

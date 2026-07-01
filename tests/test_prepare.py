@@ -68,6 +68,25 @@ def test_prepare_classification_builds_live_from_parquet(tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_env_holdout_path_beats_task_pinned_parquet(tmp_path, monkeypatch) -> None:
+    # $T1_HOLDOUT_PATH is the documented escape hatch — it must win over a task-pinned
+    # gold_parquet, or the override is dead exactly when the pinned path doesn't exist
+    # (the walk-through audit's fresh-reader traceback).
+    env_parquet = tmp_path / "env.parquet"
+    pd.DataFrame({"text": [f"e{i}" for i in range(8)], "label": [1, 0] * 4}).to_parquet(env_parquet)
+    monkeypatch.setenv("T1_HOLDOUT_PATH", str(env_parquet))
+    task = Task(
+        id="t1",
+        domain="classification",
+        grader="classification",
+        mode="single",
+        params={"gold_parquet": str(tmp_path / "does-not-exist.parquet"), "subsample_n": 4},
+    )
+    prep = prepare_task(task)  # would raise FileNotFoundError if the pinned path won
+    assert len(prep.gold["labels"]) == 4
+
+
+@pytest.mark.unit
 def test_prepare_unknown_grader_raises() -> None:
     task = Task(id="x", domain="d", grader="mystery", mode="single")
     with pytest.raises(ValueError, match="no preparer"):

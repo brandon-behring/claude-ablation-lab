@@ -30,6 +30,18 @@ def test_subsample_balanced_exact_and_seed_stable(synthetic_holdout, n: int, see
     assert set(build_gold(picked)) == set(range(n))  # positional idx 0..n-1
 
 
+@pytest.mark.unit
+def test_subsample_leaves_the_shared_fixture_untouched(synthetic_holdout) -> None:
+    # The module-scoped fixture is shared across hypothesis examples; an in-place
+    # mutation in subsample would poison later examples nondeterministically. Turn
+    # that silent contamination into a named failure (review finding).
+    import pandas as pd
+
+    before = synthetic_holdout.copy(deep=True)
+    subsample(synthetic_holdout, n=10, seed=1)
+    pd.testing.assert_frame_equal(synthetic_holdout, before)
+
+
 @pytest.mark.property
 @given(
     models=st.lists(_NAMES, min_size=1, max_size=4, unique=True),

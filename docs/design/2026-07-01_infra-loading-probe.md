@@ -31,8 +31,8 @@ only broken layer is **flat skills**.
 run (no ledger on disk), so this was never caught: T2 would score 0 for *infrastructure* reasons
 (no `research_plan.md` artifact), not model quality. **Before running T2, convert
 research_toolkit's skills to the `<name>/SKILL.md` directory form** (or add
-`.claude/commands/research-plan.md`). Out of this repo's scope, but load-bearing for any real T2
-verdict.
+`.claude/commands/research-plan.md`). research_toolkit is the author's separate (public)
+repo, so the fix lives there — but it is load-bearing for any real T2 verdict.
 
 ## Consequence for the demo (this repo)
 

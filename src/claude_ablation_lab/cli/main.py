@@ -74,6 +74,13 @@ def run(
     if not cells:
         console.print("[yellow]grid expands to 0 valid cells[/yellow]")
         raise typer.Exit(1)
+    covered = {c.task_id for c in cells}
+    for selected in tasks:
+        if selected.id not in covered:  # never fail silently: a dropped task is loud
+            console.print(
+                f"[yellow]{selected.id}: 0 cells — its infra_repo matches none of the "
+                "grid's variants (check the strings, run from the repo root)[/yellow]"
+            )
 
     if dry_run:
         _print_cells(cells)
@@ -91,6 +98,11 @@ def run(
     console.print(f"running {len(cells)} cells → {ledger}")
     summary = run_sweep(tasks, parsed_grid, runner=runner, ledger_path=ledger)
     _print_summary(summary)
+    if summary.failed:
+        console.print(
+            f"[red]{summary.failed} cell(s) failed[/red] — inspect the transcripts before "
+            "trusting this sweep (exit stays 0: the ledger is resumable)"
+        )
     if summary.halted:
         console.print(f"[red]halted:[/red] {summary.halt_reason}")
         raise typer.Exit(2)
@@ -210,6 +222,11 @@ def plot(
         compare_rows = run_compare(ledger, a, b)
         if wanted is not None:  # honour --task on the forest too, not only the per-task figures
             compare_rows = [r for r in compare_rows if r.task_id in wanted]
+        if not compare_rows:  # a requested A/B with nothing to show must say so
+            console.print(
+                f"[yellow]no A/B forest: no task ran under both {a} and {b}"
+                f"{' for the selected tasks' if wanted is not None else ''}[/yellow]"
+            )
     written = plot_mod.render_all(cells, compare_rows, out, fmt=fmt, a=a or "A", b=b or "B")
     console.print(f"wrote {len(written)} figure(s) → {out}")
     for path in written:
@@ -277,7 +294,15 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
         table.add_column(col)
     for c in cells:
         flags = " ".join(
-            f for f, on in (("★", c.pareto), ("⚠LEAK", c.leakage), ("⚠SPEC", c.n_spec > 1)) if on
+            f
+            for f, on in (
+                ("★", c.pareto),
+                ("⚠LEAK", c.leakage),
+                ("⚠SPEC", c.n_spec > 1),
+                ("⚠VER", c.n_grader_versions > 1),
+                (f"⚠{c.n_unparseable}unp", c.n_unparseable > 0),
+            )
+            if on
         )
         ci = f"[{_fmt(c.ci_low)},{_fmt(c.ci_high)}]" if c.ci_low is not None else "—"
         table.add_row(
@@ -294,18 +319,31 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
         )
     console.print(table)
     console.print(
-        "★ = Pareto-optimal (quality vs cost) · ⚠LEAK = shuffled-label control off 0.5 · "
-        "CI(epoch) shown at ≥3 epochs · ⚠SPEC = cell mixes task specs"
+        "★ = Pareto-optimal (quality vs cost) · ⚠LEAK = shuffled-label self-test off 0.5 · "
+        "⚠SPEC = cell mixes task specs · ⚠VER = cell mixes grader versions · "
+        "⚠Nunp = N unparseable epochs counted as honest 0.0 · "
+        "CI(epoch) at <5 epochs is the min–max epoch range, not a 95% CI"
     )
 
 
 def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-arg]
     """Render variant A→B deltas with the paired-bootstrap verdict."""
     table = Table(title=f"compare  A={a}  →  B={b}")
-    for col in ("task", "pairs", "mean A", "mean B", "Δ (B−A)", "95% CI", "real?", "note"):
+    for col in (
+        "task",
+        "pairs",
+        "mean A",
+        "mean B",
+        "Δ (B−A)",
+        "CI (context)",
+        "exact p",
+        "real?",
+        "note",
+    ):
         table.add_column(col)
     for d in deltas:
         ci = f"[{_fmt(d.ci_low)},{_fmt(d.ci_high)}]" if d.ci_low is not None else "—"
+        p = "—" if d.p_value is None else f"{d.p_value:.3g} (n≠0: {d.n_nonzero})"
         table.add_row(
             d.task_id,
             str(d.n_pairs),
@@ -313,10 +351,15 @@ def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-a
             _fmt(d.mean_b),
             _fmt(d.delta),
             ci,
+            p,
             "[green]yes[/green]" if d.real else "no",
             d.note,
         )
     console.print(table)
+    console.print(
+        "[dim]real? = exact sign-flip permutation test at α=0.05 (needs ≥6 nonzero pairs); "
+        "the bootstrap CI is effect-size context, never the verdict.[/dim]"
+    )
 
 
 def _print_estimate(est: Estimate) -> None:
@@ -336,7 +379,8 @@ def _print_estimate(est: Estimate) -> None:
         table.add_row(name, str(per), str(total))
     console.print(table)
     console.print(
-        "[dim]rough: one calibration cell extrapolated to all cells; per-model cost varies. "
+        "[dim]rough FLOOR: one cheapest-cell calibration extrapolated to all cells — a mixed "
+        "grid (pricier models, higher efforts, agentic tasks) commonly runs 2–5× this. "
         "Rate-limit headroom — not dollars — is the real budget.[/dim]"
     )
 

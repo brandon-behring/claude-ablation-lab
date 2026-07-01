@@ -52,6 +52,49 @@ def test_pareto_scatter_one_container_per_cell() -> None:
     cells = [_cell("haiku", "low", pareto=True), _cell("sonnet", "high", leakage=True)]
     ax = plot.pareto_scatter(cells, task="t3").axes[0]
     assert len(ax.containers) == 2  # one errorbar container per cell
+    # The advertised encodings, not just counts: the pareto cell is filled with its
+    # series colour (not white) and the leaky cell adds the ring scatter collection.
+    pareto_line = ax.containers[0][0]
+    assert pareto_line.get_markerfacecolor() != "white"
+    assert len(ax.collections) == 1  # exactly one red leakage ring
+
+
+@pytest.mark.unit
+def test_pareto_scatter_distinguishes_variants() -> None:
+    # A multi-variant ledger (the A/B showcase) must not render two variants of one
+    # model identically — one colour per (model, variant) series (review consensus).
+    cells = [
+        _cell("haiku", "low", variant="d@a", value=0.2),
+        _cell("haiku", "low", variant="d@b", value=0.9),
+    ]
+    ax = plot.pareto_scatter(cells, task="t3").axes[0]
+    colors = {line[0].get_markeredgecolor() for line in ax.containers}
+    assert len(colors) == 2  # distinct colours per variant series
+
+
+@pytest.mark.unit
+def test_pareto_scatter_renders_ci_bars_and_frontier() -> None:
+    # The live showcase always takes the CI + frontier branches (epochs=3); the suite
+    # previously never executed them (review HIGH finding).
+    cells = [
+        _cell("haiku", "low", value=0.7, cost=0.01, ci=(0.6, 0.8), pareto=True),
+        _cell("sonnet", "low", value=0.9, cost=0.10, ci=(0.85, 0.95), pareto=True),
+    ]
+    ax = plot.pareto_scatter(cells, task="t3").axes[0]
+    assert all(len(c) == 3 and c[2] for c in ax.containers)  # each errorbar has barlines
+    frontier = [ln for ln in ax.get_lines() if ln.get_linestyle() == "--"]
+    assert frontier and list(frontier[0].get_xdata()) == [0.01, 0.10]  # sorted by cost
+
+
+@pytest.mark.unit
+def test_effort_curves_render_ci_band() -> None:
+    cells = [
+        _cell("haiku", "low", value=0.6, ci=(0.5, 0.7)),
+        _cell("haiku", "high", value=0.8, ci=(0.7, 0.9)),
+    ]
+    ax = plot.effort_curves(cells, task="t3").axes[0]
+    assert len(ax.get_lines()) == 1
+    assert len(ax.collections) == 1  # the fill_between CI band exists
 
 
 @pytest.mark.unit
@@ -64,6 +107,7 @@ def test_pareto_scatter_empty_task_is_safe() -> None:
 def test_effort_curves_one_line_per_model() -> None:
     cells = [_cell("haiku", "low"), _cell("haiku", "high"), _cell("opus", "low")]
     ax = plot.effort_curves(cells, task="t3").axes[0]
+    assert len(ax.get_lines()) == 2  # a set of labels would collapse duplicates
     assert {ln.get_label() for ln in ax.get_lines()} == {"haiku", "opus"}
 
 
@@ -140,6 +184,53 @@ def test_plot_cli_writes_figures(tmp_path) -> None:
     result = CliRunner().invoke(app, ["plot", str(led), "--out", str(out)])
     assert result.exit_code == 0
     assert list(out.glob("*.png"))  # at least one figure written
+
+
+@pytest.mark.unit
+def test_plot_cli_ab_forest_wiring(tmp_path) -> None:
+    # The CLI → compare → forest path (with the --task filter honoured) was untested.
+    from typer.testing import CliRunner
+
+    from claude_ablation_lab.cli.main import app
+    from claude_ablation_lab.ledger import LedgerRow, append_row
+
+    led = tmp_path / "l.jsonl"
+    base: dict[str, object] = {
+        "task_id": "t4",
+        "effort": "low",
+        "epoch": 0,
+        "grader_version": "v1",
+        "run_status": "ok",
+        "cost_usd": 0.01,
+        "latency_s": 1.0,
+        "returncode": 0,
+        "model_resolved": "m",
+        "num_turns": 1,
+        "session_id": "s",
+        "grade_status": "ok",
+        "spec_sha": "S",
+        "ts": "2026-01-01",
+    }
+    for i, model in enumerate(("haiku", "sonnet")):
+        append_row(led, LedgerRow(**{**base, "model": model, "variant": "d@a", "run_id": f"a{i}", "value": 0.2}))  # type: ignore[arg-type]
+        append_row(led, LedgerRow(**{**base, "model": model, "variant": "d@b", "run_id": f"b{i}", "value": 0.9}))  # type: ignore[arg-type]
+    out = tmp_path / "plots"
+    result = CliRunner().invoke(
+        app, ["plot", str(led), "--out", str(out), "--a", "d@a", "--b", "d@b"]
+    )
+    assert result.exit_code == 0
+    assert (out / "compare_forest.png").exists()
+    # And the --task filter suppresses the forest (with a loud note) when nothing matches.
+    result2 = CliRunner().invoke(
+        app,
+        ["plot", str(led), "--out", str(out), "--a", "d@a", "--b", "d@b", "--task", "t4"],
+    )
+    assert result2.exit_code == 0  # t4 matches → forest present; now a non-matching task:
+    result3 = CliRunner().invoke(
+        app,
+        ["plot", str(led), "--out", str(tmp_path / "p3"), "--a", "d@a", "--b", "nope"],
+    )
+    assert "no A/B forest" in result3.stdout
 
 
 @pytest.mark.unit

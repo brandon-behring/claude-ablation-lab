@@ -13,8 +13,10 @@ infra_repo: null
 timeout_s: 300
 tags: [calibration, single-turn, eval-toolkit, infra-agnostic]
 params:
-  # Public, MIT-licensed balanced split (text + label, 1=injection); $T1_HOLDOUT_PATH overrides.
-  gold_parquet: ~/Claude/prompt-injection-detection-prototype/tests/fixtures/processed/fold-0/seed-42/train.parquet
+  # Gold = any balanced text+label parquet (1 = injection). Resolution order:
+  # $T1_HOLDOUT_PATH (wins) → an explicit `gold_parquet:` here → data/t1_holdout.parquet
+  # (gitignored). E.g. a split from the public MIT-licensed
+  # prompt-injection-detection-prototype repo.
   subsample_n: 60
   seed: 42
 gold: {}
