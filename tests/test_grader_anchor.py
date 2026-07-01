@@ -141,3 +141,14 @@ def test_registry_resolves_anchor_strict() -> None:
     assert isinstance(lenient, AnchorGrader) and not lenient.strict
     assert isinstance(strict, AnchorGrader) and strict.strict
     assert strict.version == "t3-anchor-strict-v1"
+
+
+@pytest.mark.unit
+def test_strict_trims_incidental_edge_whitespace_by_design() -> None:
+    # By design: strict is char-exact on the *trimmed* quote — incidental leading/trailing
+    # whitespace is not a faithfulness failure (internal reflow still is, tested above).
+    out = '{"claims":[{"claim":"a","quote":"   resampling method   "}]}'
+    score = AnchorGrader(strict=True).grade(
+        output=out, gold={"source_text": SRC, "expected_claims": 1}
+    )
+    assert score.value == 1.0

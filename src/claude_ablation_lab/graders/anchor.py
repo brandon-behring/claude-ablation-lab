@@ -66,6 +66,9 @@ class AnchorGrader:
             return Score(0.0, status="unparseable", details={"raw": output[:500]})
 
         expected = int(gold.get("expected_claims", self.expected_claims))
+        # Quotes are edge-trimmed in both modes: incidental leading/trailing whitespace is
+        # not a faithfulness signal. ``strict`` still requires the trimmed quote to be a
+        # character-exact substring, so it catches internal reflow — only the edges are lenient.
         quotes = [str(claim.get("quote", "")).strip() for claim in claims]
         verbatim = [q for q in quotes if q and self._prep(q) in source]
         misses = [q for q in quotes if not (q and self._prep(q) in source)]

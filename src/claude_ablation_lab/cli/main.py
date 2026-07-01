@@ -182,11 +182,17 @@ def plot(
     fmt: Annotated[str, typer.Option("--format", help="Figure format: png / svg / pdf")] = "png",
 ) -> None:
     """Render Pareto / effort-curve / A→B-forest figures from a ledger (needs the ``plot`` extra)."""
+    if fmt not in ("png", "svg", "pdf"):
+        console.print(f"[red]unsupported --format {fmt!r}[/red] (choose png / svg / pdf)")
+        raise typer.Exit(2)
+    if bool(a) != bool(b):
+        console.print("[red]--a and --b must be given together[/red] (each names a variant)")
+        raise typer.Exit(2)
     from claude_ablation_lab.analyze import report as run_report
 
     cells = run_report(ledger)
-    if task:
-        wanted = set(task)
+    wanted = set(task) if task else None
+    if wanted is not None:
         cells = [c for c in cells if c.task_id in wanted]
     if not cells:
         console.print(f"[yellow]no graded rows to plot in {ledger}[/yellow]")
@@ -202,6 +208,8 @@ def plot(
         from claude_ablation_lab.analyze import compare as run_compare
 
         compare_rows = run_compare(ledger, a, b)
+        if wanted is not None:  # honour --task on the forest too, not only the per-task figures
+            compare_rows = [r for r in compare_rows if r.task_id in wanted]
     written = plot_mod.render_all(cells, compare_rows, out, fmt=fmt, a=a or "A", b=b or "B")
     console.print(f"wrote {len(written)} figure(s) → {out}")
     for path in written:

@@ -25,13 +25,14 @@ def _cell(
     pareto: bool = False,
     leakage: bool = False,
     task: str = "t3",
+    variant: str = "none",
 ) -> ReportCell:
     lo, hi = ci if ci else (None, None)
     return ReportCell(
         task_id=task,
         model=model,
         effort=effort,
-        variant="none",
+        variant=variant,
         n_epochs=3,
         n_spec=1,
         mean_value=value,
@@ -64,6 +65,20 @@ def test_effort_curves_one_line_per_model() -> None:
     cells = [_cell("haiku", "low"), _cell("haiku", "high"), _cell("opus", "low")]
     ax = plot.effort_curves(cells, task="t3").axes[0]
     assert {ln.get_label() for ln in ax.get_lines()} == {"haiku", "opus"}
+
+
+@pytest.mark.unit
+def test_effort_curves_do_not_span_variants() -> None:
+    # A model run under two variants must be two separate lines, not one mixed trend.
+    cells = [
+        _cell("haiku", "low", task="t4", variant="repo@a"),
+        _cell("haiku", "high", task="t4", variant="repo@a"),
+        _cell("haiku", "low", task="t4", variant="repo@b"),
+        _cell("haiku", "high", task="t4", variant="repo@b"),
+    ]
+    ax = plot.effort_curves(cells, task="t4").axes[0]
+    assert len(ax.get_lines()) == 2
+    assert {ln.get_label() for ln in ax.get_lines()} == {"haiku @ repo@a", "haiku @ repo@b"}
 
 
 @pytest.mark.unit
@@ -125,3 +140,24 @@ def test_plot_cli_writes_figures(tmp_path) -> None:
     result = CliRunner().invoke(app, ["plot", str(led), "--out", str(out)])
     assert result.exit_code == 0
     assert list(out.glob("*.png"))  # at least one figure written
+
+
+@pytest.mark.unit
+def test_plot_cli_rejects_partial_ab(tmp_path) -> None:
+    from typer.testing import CliRunner
+
+    from claude_ablation_lab.cli.main import app
+
+    # --a without --b is a silent no-forest today; must now fail loudly (before reading the ledger).
+    result = CliRunner().invoke(app, ["plot", str(tmp_path / "l.jsonl"), "--a", "onlyA"])
+    assert result.exit_code == 2 and "must be given together" in result.stdout
+
+
+@pytest.mark.unit
+def test_plot_cli_rejects_bad_format(tmp_path) -> None:
+    from typer.testing import CliRunner
+
+    from claude_ablation_lab.cli.main import app
+
+    result = CliRunner().invoke(app, ["plot", str(tmp_path / "l.jsonl"), "--format", "gif"])
+    assert result.exit_code == 2 and "unsupported --format" in result.stdout

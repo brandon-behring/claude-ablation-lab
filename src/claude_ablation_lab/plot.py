@@ -117,7 +117,7 @@ def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
 
 
 def effort_curves(cells: list[ReportCell], *, task: str) -> Figure:
-    """Quality-vs-effort curves for one task (one line per model); CI band where present."""
+    """Quality-vs-effort curves for one task: one line per (model, variant); CI band if present."""
     task_cells = [c for c in cells if c.task_id == task]
     fig, ax = plt.subplots(figsize=(7, 5))
     if not task_cells:
@@ -125,19 +125,24 @@ def effort_curves(cells: list[ReportCell], *, task: str) -> Figure:
         return fig
     efforts = sorted({c.effort for c in task_cells}, key=_effort_rank)
     x_of = {e: i for i, e in enumerate(efforts)}
-    models = sorted({c.model for c in task_cells})
+    variants = {c.variant for c in task_cells}
+    series = sorted({(c.model, c.variant) for c in task_cells})
     cmap = plt.get_cmap("tab10")
 
-    for i, m in enumerate(models):
-        mcells = sorted(
-            (c for c in task_cells if c.model == m), key=lambda c: _effort_rank(c.effort)
+    for i, (model, variant) in enumerate(series):
+        # A curve must not span variants: cells for one model under different variants
+        # are distinct configurations, not points on a single effort trend.
+        scells = sorted(
+            (c for c in task_cells if c.model == model and c.variant == variant),
+            key=lambda c: _effort_rank(c.effort),
         )
-        xs = [x_of[c.effort] for c in mcells]
-        ys = [c.mean_value for c in mcells]
+        xs = [x_of[c.effort] for c in scells]
+        ys = [c.mean_value for c in scells]
         color = cmap(i % 10)
-        ax.plot(xs, ys, marker="o", color=color, label=m)
-        band_lo = [c.ci_low for c in mcells if c.ci_low is not None]
-        band_hi = [c.ci_high for c in mcells if c.ci_high is not None]
+        label = model if len(variants) == 1 else f"{model} @ {variant}"
+        ax.plot(xs, ys, marker="o", color=color, label=label)
+        band_lo = [c.ci_low for c in scells if c.ci_low is not None]
+        band_hi = [c.ci_high for c in scells if c.ci_high is not None]
         if len(band_lo) == len(xs) == len(band_hi):  # CI band only if every point has one
             ax.fill_between(xs, band_lo, band_hi, color=color, alpha=0.15)
 
@@ -146,7 +151,7 @@ def effort_curves(cells: list[ReportCell], *, task: str) -> Figure:
     ax.set_xlabel("thinking effort")
     ax.set_ylabel("mean quality")
     ax.set_title(f"{task}: quality vs effort")
-    ax.legend(title="model", fontsize=8)
+    ax.legend(title="model" if len(variants) == 1 else "model @ variant", fontsize=8)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     return fig
@@ -176,6 +181,7 @@ def ab_forest(rows: list[CompareRow], *, a: str, b: str) -> Figure:
         )
     ax.set_yticks(range(len(rows)))
     ax.set_yticklabels([r.task_id for r in rows])
+    ax.invert_yaxis()  # first task at the top, matching reading order
     ax.set_xlabel(f"Δ mean quality   (B = {b})  −  (A = {a})")
     ax.set_title("is the difference real?   (green = 95% CI excludes 0)")
     ax.grid(True, axis="x", alpha=0.3)
