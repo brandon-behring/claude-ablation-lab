@@ -81,7 +81,7 @@ def test_setup_sh_builds_worktreeable_two_ref_repo(tmp_path) -> None:
     assert set(branches) == {"with-skill", "without-skill"}
 
     def _has_skill(ref: str) -> bool:
-        target = f"{ref}:.claude/skills/project-reference.md"
+        target = f"{ref}:.claude/skills/project-reference/SKILL.md"
         return (
             subprocess.run(
                 ["git", "-C", str(dest), "cat-file", "-e", target], capture_output=True
@@ -98,4 +98,4 @@ def test_setup_sh_builds_worktreeable_two_ref_repo(tmp_path) -> None:
         check=True,
         capture_output=True,
     )
-    assert (wt / ".claude" / "skills" / "project-reference.md").is_file()
+    assert (wt / ".claude" / "skills" / "project-reference" / "SKILL.md").is_file()

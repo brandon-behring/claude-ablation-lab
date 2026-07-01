@@ -118,9 +118,17 @@ def load_grid(path: Path | str) -> Grid:
 
 
 def _compatible(task: Task, variant: str) -> bool:
-    """True iff a task may run under a variant (infra-agnostic ⇔ ``none`` variant)."""
-    is_none = variant == NONE_VARIANT
-    return (task.infra_repo is None) == is_none
+    """True iff a task may run under a variant.
+
+    Infra-agnostic tasks (``infra_repo is None``) run only under ``none``. An
+    infra-sensitive task runs only under a variant whose **repo matches its own
+    ``infra_repo``**, so a grid listing several infra repos never runs a task under an
+    unrelated one (that would load the wrong project's config and measure nothing).
+    """
+    if task.infra_repo is None:
+        return variant == NONE_VARIANT
+    parsed = parse_variant(variant)  # None for the ``none`` variant
+    return parsed is not None and parsed[0] == task.infra_repo
 
 
 def expand_grid(grid: Grid, tasks: list[Task]) -> list[Cell]:

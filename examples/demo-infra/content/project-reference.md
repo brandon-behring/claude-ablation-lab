@@ -1,6 +1,6 @@
 ---
 name: project-reference
-description: Project Vega reference — how Vega scores candidates (the harmonic gate, cold candidates, the amber cache, wide runs). Use when asked anything about Vega's scoring conventions.
+description: Project Vega's scoring reference. Use whenever the user asks how Project Vega scores or evaluates candidates.
 ---
 
 # Project Vega — reference

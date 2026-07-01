@@ -65,6 +65,15 @@ def test_expand_task_variant_compatibility() -> None:
 
 
 @pytest.mark.unit
+def test_expand_drops_task_under_mismatched_infra_repo() -> None:
+    # A grid may list several infra repos; a task runs only under ITS repo's refs, never
+    # an unrelated one (which would load the wrong project's config and measure nothing).
+    grid = Grid(("haiku",), ("low",), ("repoA@v1", "repoB@v1"), 1)
+    variants = {c.variant for c in expand_grid(grid, [_task("t", infra_repo="repoA")])}
+    assert variants == {"repoA@v1"}  # repoB@v1 dropped — wrong repo
+
+
+@pytest.mark.unit
 def test_expand_epochs_and_order() -> None:
     grid = Grid(("haiku",), ("low",), ("none",), 3)
     cells = expand_grid(grid, [_task("t", infra_repo=None)])

@@ -593,9 +593,13 @@ def test_run_sweep_bad_variant_skips_its_cells_without_crashing(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(orchestrate, "get_grader", lambda _name: FakeGrader("v1"))
-    task = Task(id="t2", domain="r", grader="validator", mode="agent", prompt="go", infra_repo="x")
-    # A variant pointing at a non-git path: ensure_worktree fails → cells skipped, not a crash.
-    grid = Grid(("haiku",), ("low",), (f"{tmp_path / 'nope'}@HEAD",), 2)
+    bad_repo = tmp_path / "nope"  # a real path, but not a git repo
+    task = Task(
+        id="t2", domain="r", grader="validator", mode="agent", prompt="go", infra_repo=str(bad_repo)
+    )
+    # Variant repo matches the task's infra_repo (so the cell is compatible), but the path is
+    # not a git repo → ensure_worktree fails at runtime → cells skipped, not a crash.
+    grid = Grid(("haiku",), ("low",), (f"{bad_repo}@HEAD",), 2)
     summary = run_sweep(
         [task],
         grid,
