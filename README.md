@@ -11,14 +11,20 @@ The goal is not to reproduce Anthropic's published base numbers — it's to meas
 - **Graders:** per-task; v1 ships AUROC (classification), an existing `research_toolkit` validator, and a verbatim-substring anchor check.
 - **Ledger:** append-only JSONL (resumable) + sidecar transcripts; `report`/`compare` query it via **DuckDB**, with bootstrap CIs from **eval-toolkit**.
 
-## Install
+## Setup
+
+**Prerequisites:** Python **3.13+**, `git`, the [`claude`](https://docs.claude.com/en/docs/claude-code) CLI (logged in to your subscription), and a virtualenv tool ([`uv`](https://docs.astral.sh/uv/) recommended).
 
 ```bash
-make install      # installs eval-toolkit (editable, local sibling) + this package [dev]
-make hooks        # pre-commit (ruff/black @commit, mypy @pre-push)
+uv venv --python 3.13 --seed && source .venv/bin/activate   # --seed puts pip in the venv; or: python3.13 -m venv .venv
+make install      # eval-toolkit (pinned, from GitHub) + this package [dev]
+make hooks        # optional: pre-commit (ruff/black @commit, mypy @pre-push)
 ```
 
-`eval-toolkit` is consumed from `~/Claude/eval-toolkit` (override with `EVAL_TOOLKIT=...`).
+Two dependencies are **public but not on PyPI**:
+
+- **[eval-toolkit](https://github.com/brandon-behring/eval-toolkit)** — bootstrap CIs + AUROC behind the graders and `report`/`compare`. `make install` fetches a pinned release from GitHub; for editable dev pass a local checkout: `EVAL_TOOLKIT=~/eval-toolkit make install`.
+- **[research_toolkit](https://github.com/brandon-behring/research_toolkit)** — only for task **T2** (its `/research-plan` validator, and as an infra-variant worktree). Optional — T1/T3 are infra-agnostic and run without it.
 
 ## Quickstart
 
