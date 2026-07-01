@@ -24,6 +24,7 @@ from claude_ablation_lab.grid import expand_grid, load_grid
 from claude_ablation_lab.task import Task, load_all, load_task
 
 if TYPE_CHECKING:
+    from claude_ablation_lab.analyze import CompareRow
     from claude_ablation_lab.orchestrate import Estimate, SweepSummary
 
 app = typer.Typer(
@@ -163,6 +164,48 @@ def compare(
         console.print(f"[yellow]no task ran under both {a} and {b} in {ledger}[/yellow]")
         return
     _print_compare(deltas, a, b)
+
+
+@app.command()
+def plot(
+    ledger: Annotated[Path, typer.Argument(help="JSONL ledger to visualize")],
+    out: Annotated[Path, typer.Option(help="Directory to write figures to")] = Path(
+        "results/plots"
+    ),
+    task: Annotated[list[str] | None, typer.Option(help="Only plot these task ids")] = None,
+    a: Annotated[
+        str | None, typer.Option("--a", help="Baseline variant for the A/B forest")
+    ] = None,
+    b: Annotated[
+        str | None, typer.Option("--b", help="Candidate variant for the A/B forest")
+    ] = None,
+    fmt: Annotated[str, typer.Option("--format", help="Figure format: png / svg / pdf")] = "png",
+) -> None:
+    """Render Pareto / effort-curve / A→B-forest figures from a ledger (needs the ``plot`` extra)."""
+    from claude_ablation_lab.analyze import report as run_report
+
+    cells = run_report(ledger)
+    if task:
+        wanted = set(task)
+        cells = [c for c in cells if c.task_id in wanted]
+    if not cells:
+        console.print(f"[yellow]no graded rows to plot in {ledger}[/yellow]")
+        return
+    try:
+        from claude_ablation_lab import plot as plot_mod
+    except ImportError:
+        console.print('[red]matplotlib not installed[/red] — run: pip install -e ".[plot]"')
+        raise typer.Exit(1) from None
+
+    compare_rows: list[CompareRow] = []
+    if a and b:
+        from claude_ablation_lab.analyze import compare as run_compare
+
+        compare_rows = run_compare(ledger, a, b)
+    written = plot_mod.render_all(cells, compare_rows, out, fmt=fmt, a=a or "A", b=b or "B")
+    console.print(f"wrote {len(written)} figure(s) → {out}")
+    for path in written:
+        console.print(f"  {path.name}")
 
 
 def _print_cells(cells: list) -> None:  # type: ignore[type-arg]

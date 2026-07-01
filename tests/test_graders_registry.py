@@ -9,7 +9,7 @@ from claude_ablation_lab.graders import GRADER_NAMES, get_grader
 
 
 @pytest.mark.unit
-@pytest.mark.parametrize("name", ["anchor", "validator"])
+@pytest.mark.parametrize("name", ["anchor", "anchor_strict", "validator"])
 def test_get_grader_returns_a_grader(name: str) -> None:
     grader = get_grader(name)
     assert isinstance(grader, Grader)
@@ -29,5 +29,5 @@ def test_unknown_grader_raises() -> None:
 
 
 @pytest.mark.unit
-def test_grader_names_are_the_three_seed_graders() -> None:
-    assert set(GRADER_NAMES) == {"classification", "validator", "anchor"}
+def test_grader_names_cover_seed_graders_and_anchor_strict() -> None:
+    assert set(GRADER_NAMES) == {"classification", "validator", "anchor", "anchor_strict"}

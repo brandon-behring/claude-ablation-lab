@@ -105,3 +105,39 @@ def test_no_claim_structure_is_unparseable() -> None:
 def test_empty_source_is_grader_error() -> None:
     out = '{"claims":[{"claim":"a","quote":"bootstrap"}]}'
     assert AnchorGrader().grade(output=out, gold={}).status == "grader_error"
+
+
+@pytest.mark.unit
+def test_strict_version_differs_from_lenient() -> None:
+    assert AnchorGrader().version == "t3-anchor-v1"
+    assert AnchorGrader(strict=True).version == "t3-anchor-strict-v1"
+
+
+@pytest.mark.golden
+def test_strict_rejects_reflow_that_lenient_accepts() -> None:
+    # The discriminator: the reflowed quote lenient scores 1.0, strict must score 0.0.
+    source = "samples,\n    with replacement,\n    from the observed data"
+    out = '{"claims":[{"claim":"a","quote":"samples, with replacement, from the observed data"}]}'
+    gold = {"source_text": source, "expected_claims": 1}
+    assert AnchorGrader().grade(output=out, gold=gold).value == 1.0
+    assert AnchorGrader(strict=True).grade(output=out, gold=gold).value == 0.0
+
+
+@pytest.mark.golden
+def test_strict_accepts_character_exact_quote() -> None:
+    # A byte-for-byte substring still scores 1.0 under strict (it is not just "reject all").
+    out = '{"claims":[{"claim":"a","quote":"resampling method"}]}'
+    score = AnchorGrader(strict=True).grade(
+        output=out, gold={"source_text": SRC, "expected_claims": 1}
+    )
+    assert score.value == 1.0 and score.status == "ok"
+
+
+@pytest.mark.unit
+def test_registry_resolves_anchor_strict() -> None:
+    from claude_ablation_lab.graders import get_grader
+
+    lenient, strict = get_grader("anchor"), get_grader("anchor_strict")
+    assert isinstance(lenient, AnchorGrader) and not lenient.strict
+    assert isinstance(strict, AnchorGrader) and strict.strict
+    assert strict.version == "t3-anchor-strict-v1"

@@ -13,10 +13,12 @@ over-production. Empty/missing quotes count as misses (they are not verbatim);
 a valid-but-empty claim list scores an honest 0.0, and only output with no
 parseable claim structure is ``unparseable``.
 
-Matching is **whitespace-normalised** (runs of whitespace collapsed to single
-spaces on both sides): a model that copies the content faithfully but reflows
-line-wrapping is not penalised, while fabricated/altered content still fails.
-Character-strict SHA256 anchoring is a backlog upgrade.
+Matching is **whitespace-normalised** by default (runs of whitespace collapsed to
+single spaces on both sides): a model that copies the content faithfully but reflows
+line-wrapping is not penalised, while fabricated/altered content still fails. The
+``strict=True`` variant (grader ``anchor_strict``) instead requires a character-exact
+substring — a stricter faithfulness bar whose gap from the lenient score is itself a
+signal. (Plain substring, not SHA256 — hashing buys nothing at paragraph scale.)
 """
 
 from __future__ import annotations
@@ -38,14 +40,24 @@ _DEFAULT_EXPECTED_CLAIMS = 5
 
 @dataclass(frozen=True, slots=True)
 class AnchorGrader:
-    """Fraction of expected claims whose quote is a whitespace-normalised substring."""
+    """Fraction of expected claims whose quote is a substring of the source.
 
-    version: str = "t3-anchor-v1"
+    ``strict=False`` (default) matches whitespace-normalised (reflow-tolerant);
+    ``strict=True`` requires a **character-exact** substring — a stricter faithfulness
+    bar. The two carry different ``version`` strings, so a ledger can hold both and
+    ``ablation regrade`` can add the strict score to stored T3 runs for free.
+    """
+
+    strict: bool = False
     expected_claims: int = _DEFAULT_EXPECTED_CLAIMS
 
+    @property
+    def version(self) -> str:
+        return "t3-anchor-strict-v1" if self.strict else "t3-anchor-v1"
+
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
-        """Score ``output`` against ``gold["source_text"]`` (whitespace-normalised)."""
-        source = _normalize(str(gold.get("source_text", "")))
+        """Score ``output`` against ``gold["source_text"]`` (char-exact if ``strict``)."""
+        source = self._prep(str(gold.get("source_text", "")))
         if not source:
             return Score(0.0, status="grader_error", details={"reason": "empty source_text"})
 
@@ -55,8 +67,8 @@ class AnchorGrader:
 
         expected = int(gold.get("expected_claims", self.expected_claims))
         quotes = [str(claim.get("quote", "")).strip() for claim in claims]
-        verbatim = [q for q in quotes if q and _normalize(q) in source]
-        misses = [q for q in quotes if not (q and _normalize(q) in source)]
+        verbatim = [q for q in quotes if q and self._prep(q) in source]
+        misses = [q for q in quotes if not (q and self._prep(q) in source)]
 
         denominator = max(expected, len(claims))
         value = len(verbatim) / denominator if denominator else 0.0
@@ -69,6 +81,10 @@ class AnchorGrader:
             },
             details={"misses": misses, "shortfall": max(0, expected - len(claims))},
         )
+
+    def _prep(self, text: str) -> str:
+        """Char-exact in strict mode; whitespace-collapsed (reflow-tolerant) otherwise."""
+        return text if self.strict else _normalize(text)
 
 
 def _normalize(text: str) -> str:

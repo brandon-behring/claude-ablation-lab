@@ -105,6 +105,7 @@ _PREPARERS = {
     "classification": _prepare_classification,
     "validator": _prepare_validator,
     "anchor": _prepare_anchor,
+    "anchor_strict": _prepare_anchor,  # same static prep; only the grader differs
 }
 
 
