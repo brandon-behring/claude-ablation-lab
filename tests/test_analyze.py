@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-pytest.importorskip("eval_toolkit")  # report/compare import eval_toolkit lazily at call time
+from claude_ablation_lab.analyze import compare, report
+from claude_ablation_lab.ledger import LedgerRow, append_row
 
-from claude_ablation_lab.analyze import compare, report  # noqa: E402
-from claude_ablation_lab.ledger import LedgerRow, append_row  # noqa: E402
+# eval_toolkit backs only the bootstrap CIs (report cells with >=3 epochs, compare
+# with >=2 configs). Those tests guard individually with importorskip below, so the
+# rest of the report/compare logic stays covered even without the optional dep.
 
 
 def _row(
@@ -107,6 +109,7 @@ def test_report_flags_label_leakage(tmp_path) -> None:
 
 @pytest.mark.unit
 def test_report_leakage_uses_worst_epoch_not_mean(tmp_path) -> None:
+    pytest.importorskip("eval_toolkit")  # 3 epochs → across-epoch bootstrap CI
     led = tmp_path / "l.jsonl"
     # One leaky epoch (0.85) among clean ones: mean dev 0.117 < band, MAX dev 0.35 > band.
     for i, s in enumerate([0.85, 0.50, 0.50]):
@@ -117,6 +120,7 @@ def test_report_leakage_uses_worst_epoch_not_mean(tmp_path) -> None:
 
 @pytest.mark.unit
 def test_report_across_epoch_ci_only_at_three_plus_epochs(tmp_path) -> None:
+    pytest.importorskip("eval_toolkit")  # 3 epochs → across-epoch bootstrap CI
     led = tmp_path / "l.jsonl"
     _row(led, rid="a", epoch=0, value=0.6)
     _row(led, rid="b", epoch=1, value=0.9)
@@ -148,6 +152,7 @@ def test_report_ignores_failed_and_ungraded_rows(tmp_path) -> None:
 
 @pytest.mark.unit
 def test_compare_detects_a_real_delta(tmp_path) -> None:
+    pytest.importorskip("eval_toolkit")  # 4 configs → paired bootstrap
     led = tmp_path / "l.jsonl"
     va, vb = "repo@a", "repo@b"
     configs = [("haiku", "low"), ("haiku", "high"), ("sonnet", "low"), ("sonnet", "high")]
@@ -163,6 +168,7 @@ def test_compare_detects_a_real_delta(tmp_path) -> None:
 
 @pytest.mark.unit
 def test_compare_below_floor_is_never_real(tmp_path) -> None:
+    pytest.importorskip("eval_toolkit")  # 2 configs → paired bootstrap
     led = tmp_path / "l.jsonl"
     va, vb = "repo@a", "repo@b"
     # Only 2 same-sign configs: the bootstrap CI excludes 0 by construction, so the
