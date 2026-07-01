@@ -1,0 +1,23 @@
+# Public showcase grid (Phase C) — self-contained, leak-safe tasks only.
+#   t3_verbatim_anchor  → variant `none` (infra-agnostic)
+#   t4_demo_infra       → the two demo-infra refs (run examples/demo-infra/setup.sh first,
+#                         from the REPO ROOT — the `.demo-infra` strings resolve against
+#                         the directory you invoke `ablation` from)
+# T1/T2 are intentionally excluded: T1 needs the prompt-injection holdout, T2 needs an
+# external research_toolkit checkout. This grid stays cheap and reproducible by any reader.
+#
+# T4 gives exactly 6 matched (model, effort) configs under both refs. Six is the first
+# n where the exact sign-flip permutation test can reach p <= 0.05 (min p = 2/2^n:
+# 0.125 at 4 pairs, 0.031 at 6) — so the designed positive control can print an HONEST
+# real=yes verdict rather than a bootstrap tautology.
+models: [haiku, sonnet, opus]
+efforts: [low, high]
+variants:
+  - none
+  - .demo-infra@without-skill
+  - .demo-infra@with-skill
+epochs: 3
+effort_support:
+  haiku: [low, high]
+  sonnet: [low, high]
+  opus: [low, high]

@@ -118,9 +118,17 @@ def load_grid(path: Path | str) -> Grid:
 
 
 def _compatible(task: Task, variant: str) -> bool:
-    """True iff a task may run under a variant (infra-agnostic ⇔ ``none`` variant)."""
-    is_none = variant == NONE_VARIANT
-    return (task.infra_repo is None) == is_none
+    """True iff a task may run under a variant.
+
+    Infra-agnostic tasks (``infra_repo is None``) run only under ``none``. An
+    infra-sensitive task runs only under a variant whose **repo matches its own
+    ``infra_repo``**, so a grid listing several infra repos never runs a task under an
+    unrelated one (that would load the wrong project's config and measure nothing).
+    """
+    if task.infra_repo is None:
+        return variant == NONE_VARIANT
+    parsed = parse_variant(variant)  # None for the ``none`` variant
+    return parsed is not None and parsed[0] == task.infra_repo
 
 
 def expand_grid(grid: Grid, tasks: list[Task]) -> list[Cell]:
@@ -129,9 +137,21 @@ def expand_grid(grid: Grid, tasks: list[Task]) -> list[Cell]:
     Iteration order is ``(task, variant, model, effort, epoch)`` — deterministic so
     a resumed sweep visits cells in the same sequence and the ledger is diff-stable.
     """
+    # Vet variant syntax once up front: a malformed spec entry is dropped-and-logged
+    # (matching the effort/compatibility drop semantics) rather than aborting the
+    # whole expansion mid-loop via parse_variant's ValueError.
+    variants: list[str] = []
+    for variant in grid.variants:
+        try:
+            parse_variant(variant)
+        except ValueError as exc:
+            logger.warning("drop malformed variant %r: %s", variant, exc)
+            continue
+        variants.append(variant)
+
     cells: list[Cell] = []
     for task in tasks:
-        for variant in grid.variants:
+        for variant in variants:
             if not _compatible(task, variant):
                 logger.info(
                     "drop %s × %s: infra_repo=%s incompatible with variant",

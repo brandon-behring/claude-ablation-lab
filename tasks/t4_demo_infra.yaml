@@ -1,0 +1,28 @@
+# T4 — demo-infra skill A/B (the public showcase headline).
+# Claude must quote the Project Vega reference, which lives ONLY in the with-skill
+# infra ref (.claude/skills/project-reference/SKILL.md) — NOT in this prompt. Under
+# with-skill the quotes are exact substrings (anchor ~1.0); under without-skill Claude
+# has never seen Vega and cannot quote it (~0). Infra-sensitive: runs under a
+# demo-infra@ref worktree, never `none`. See examples/demo-infra/.
+id: t4_demo_infra
+domain: demo
+grader: anchor
+mode: single
+infra_repo: .demo-infra
+timeout_s: 300
+tags: [faithfulness, infra-sensitive, demo, skill-ab]
+gold:
+  # The reference the model quotes lives ONLY in the with-skill ref's SKILL.md; the grader
+  # scores the model's quotes against this gold, so it must contain that file's body (title
+  # + prose) verbatim — a test enforces the substring relationship.
+  source_text: |
+    # Project Vega — reference
+
+    Vega scores each candidate with the harmonic gate: the geometric mean of recall and calibration, floored at 0.2. A candidate below the floor is marked cold and skipped. The gate was chosen over the arithmetic mean because a single near-zero component should dominate the score. Vega recomputes the gate nightly and caches it under the amber namespace. Any run that touches more than forty shards is tagged wide and given a doubled timeout.
+  expected_claims: 3
+prompt: |
+  Extract exactly 3 factual claims about how "Project Vega" scores candidates. Each claim's
+  "quote" must be an EXACT verbatim substring copied from the Project Vega reference — this
+  project's "project-reference" skill provides it, so consult that skill; do not invent
+  details. If no Project Vega reference is available to you, return an empty claims list.
+  Return ONLY JSON of the form {"claims":[{"claim":"...","quote":"..."}]}.

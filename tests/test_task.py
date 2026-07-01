@@ -17,11 +17,17 @@ TASKS_DIR = Path(__file__).resolve().parents[1] / "tasks"
 
 
 @pytest.mark.unit
-def test_load_all_three_seed_tasks() -> None:
+def test_load_all_seed_tasks() -> None:
     tasks = {t.id: t for t in load_all(TASKS_DIR)}
-    assert set(tasks) == {"t1_prompt_injection", "t2_research_plan", "t3_verbatim_anchor"}
+    assert set(tasks) == {
+        "t1_prompt_injection",
+        "t2_research_plan",
+        "t3_verbatim_anchor",
+        "t4_demo_infra",
+    }
     assert tasks["t2_research_plan"].mode == "agent"
     assert tasks["t1_prompt_injection"].infra_repo is None
+    assert tasks["t4_demo_infra"].infra_repo is not None  # infra-sensitive (the demo A/B)
     for task in tasks.values():
         assert isinstance(task, Task)
         assert task.grader in {"classification", "validator", "anchor"}
