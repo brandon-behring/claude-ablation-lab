@@ -30,7 +30,10 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_BASE = Path(".worktrees")
+# OUTSIDE any repo by construction (PR-review finding): a base under the harness repo
+# makes the harness's own CLAUDE.md ancestor memory for every cell — the exact leak the
+# hermetic-cell design closes. Overridable per run via `ablation run --worktree-base`.
+DEFAULT_BASE = Path.home() / ".cache" / "claude-ablation-lab" / "worktrees"
 
 
 @dataclass(frozen=True, slots=True)

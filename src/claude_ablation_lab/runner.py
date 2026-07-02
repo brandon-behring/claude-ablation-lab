@@ -57,6 +57,7 @@ HERMETIC_DISALLOWED_TOOLS: tuple[str, ...] = (
     "Write",
     "Edit",
     "NotebookEdit",
+    "SlashCommand",  # user-level ~/.claude/commands must not inject into a cell
 )
 
 
@@ -219,7 +220,11 @@ class ClaudeCodeRunner:
             # can only see its prompt, its cwd-loaded memory/skills, and the Skill tool.
             # The A/B control arm must have no path to its gold — which is public in
             # this repo and present in prior sessions' transcripts on the host.
+            # --no-session-persistence stops NEW gold-bearing session files accumulating
+            # under ~/.claude/projects (the source the probe's grep actually found);
+            # mechanism evidence comes from the runner's own transcript sidecars.
             "--strict-mcp-config",
+            "--no-session-persistence",
         ]
         if self.disallowed_tools:
             argv += ["--disallowedTools", *self.disallowed_tools]

@@ -65,10 +65,12 @@ class LedgerRow:
     returncode: int | None
     model_resolved: str | None
     num_turns: int
-    session_id: str | None
     # --- grade outcome ---
     grade_status: str
     value: float
+    # Defaulted so the published sanitized ledger (which strips it) stays loadable by
+    # load_rows — the showcase file must remain a real ledger, not just a report input.
+    session_id: str | None = None
     spec_sha: str = ""  # fingerprint of (prompt, schema, gold) — gates resume/re-grade
     subscores: dict[str, float] = field(default_factory=dict)
     details: dict[str, Any] = field(default_factory=dict)

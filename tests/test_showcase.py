@@ -121,9 +121,9 @@ def test_sanitize_ledger_roundtrip(tmp_path: Path) -> None:
     out = tmp_path / "showcase.jsonl"
 
     assert sanitize_ledger(raw, out) == 4
-    published = [json.loads(line) for line in out.read_text().splitlines()]
+    published = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
     assert len(published) == 4
-    text = out.read_text()
+    text = out.read_text(encoding="utf-8")
     assert "/Users/" not in text and "session_id" not in text and "output_preview" not in text
 
 

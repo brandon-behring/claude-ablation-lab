@@ -77,10 +77,12 @@ def test_argv_includes_core_flags_and_optionals() -> None:
     for flag in ("--model", "--effort", "--output-format", "--max-budget-usd", "--permission-mode"):
         assert flag in argv
     assert argv[argv.index("--output-format") + 1] == "json"
-    # Hermeticity flags ride on EVERY cell: no user MCP servers, and the full escape
-    # surface (exec/fs-read/net/delegation) disallowed — a live probe showed a control
+    # Hermeticity flags ride on EVERY cell: no user MCP servers, no session files left
+    # on the host (they accumulate gold), and the full escape surface
+    # (exec/fs-read/net/delegation) disallowed — a live probe showed a control
     # cell running Bash and locating its own gold outside the worktree.
     assert "--strict-mcp-config" in argv
+    assert "--no-session-persistence" in argv
     i = argv.index("--disallowedTools")
     from claude_ablation_lab.runner import HERMETIC_DISALLOWED_TOOLS
 

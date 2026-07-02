@@ -48,8 +48,25 @@ STRIP_FIELDS: tuple[str, ...] = (
 #: No kept string may exceed this — long strings are how prompt/output text sneaks out.
 MAX_STRING_LEN = 200
 
-#: Substrings that mark a leaked local path on any supported host.
-FORBIDDEN_FRAGMENTS: tuple[str, ...] = ("/Users/", "/home/", "/private/", "\\Users\\", "/tmp/")
+#: Substrings that mark a leaked local path (common Unix/macOS/Windows roots). This is a
+#: deny-list, not a parser — it exists on top of STRIP_FIELDS as a second net, and the
+#: kept fields are short structured values where any of these reads as a leak.
+FORBIDDEN_FRAGMENTS: tuple[str, ...] = (
+    "/Users/",
+    "/home/",
+    "/private/",
+    "/tmp/",
+    "/var/",
+    "/etc/",
+    "/opt/",
+    "/srv/",
+    "/mnt/",
+    "/root/",
+    "/Volumes/",
+    "~/",
+    "\\Users\\",
+    "C:\\",
+)
 
 
 def _scan(value: Any, path: str) -> None:
@@ -84,11 +101,8 @@ def sanitize_row(row: dict[str, Any]) -> dict[str, Any]:
 
 def sanitize_ledger(raw_path: Path, out_path: Path) -> int:
     """Sanitize ``raw_path`` → ``out_path``; returns the row count (must be > 0)."""
-    rows = [
-        sanitize_row(json.loads(line))
-        for line in raw_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
+    with raw_path.open(encoding="utf-8") as handle:
+        rows = [sanitize_row(json.loads(line)) for line in handle if line.strip()]
     if not rows:
         raise ValueError(f"{raw_path}: no rows — refusing to publish an empty ledger")
     out_path.parent.mkdir(parents=True, exist_ok=True)

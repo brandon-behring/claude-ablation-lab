@@ -68,12 +68,20 @@ matched (model, effort) config pairs) runs under the following rules, fixed in a
   is not paranoia: in the extended pilot, a control-arm opus cell *ran Bash* under
   headless defaults and grepped beyond its worktree, locating host files that contain
   the gold (prior sessions' transcripts; the public repo is one `curl` away). Web-tool
-  denial alone is not a boundary. The showcase sweep also materializes worktrees
-  **outside** the harness repo (`--worktree-base`) so the harness's own `CLAUDE.md` is
-  not ancestor memory for any cell, and the fixture README is neutral: the subject model
-  is never told the experiment design, its arm, or the expected outcome. (The ledger's
-  `mcp_servers` provenance field records what the *host environment* configures, not
-  what a cell loads — cells load none.)
+  denial alone is not a boundary — and the deny-list is a deny-list, not a sandbox:
+  every run's transcripts are checked behaviorally on top of it. Worktrees materialize
+  **outside any repo by default** (`~/.cache/claude-ablation-lab/worktrees`,
+  `--worktree-base` to override) so the harness's own `CLAUDE.md` is not ancestor memory
+  for any cell, and the fixture README is neutral: the subject model is never told the
+  experiment design, its arm, or the expected outcome. (The ledger's `mcp_servers`
+  provenance field records what the *host environment* configures, not what a cell
+  loads — cells load none.) **Post-run hardening (PR #11 review):** cells now also run
+  `--no-session-persistence`, so gold-bearing session files stop accumulating on the
+  host at the source; the published 2026-07-02 run predates that flag — its session
+  files are exactly what the per-cell mechanism evidence was harvested from, and the
+  tool denials closed the access path. An *agentic* task (one that legitimately needs
+  Bash/file tools, like T2) must explicitly relax `ClaudeCodeRunner.disallowed_tools`
+  and accept the weaker boundary — the showcase tasks never do.
 
 ## Audit trail
 
