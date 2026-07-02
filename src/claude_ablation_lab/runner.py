@@ -30,12 +30,34 @@ __all__ = [
     "result_from_payload",
     "extract_json",
     "AUTH_ENV_STRIP",
+    "HERMETIC_DISALLOWED_TOOLS",
 ]
 
 RunStatus = Literal["ok", "rate_limited", "infra_error", "timeout", "parse_fail"]
 
 # Env vars removed from the subprocess so `claude` uses the subscription login.
 AUTH_ENV_STRIP: tuple[str, ...] = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+#: Tools disallowed in every cell by default: the exec / filesystem-read / network /
+#: delegation escape surface. A live probe (2026-07-02 extended pilot) showed headless
+#: cells CAN run Bash — a control-arm cell grepped beyond its worktree and located
+#: files containing its own gold (prior sessions' transcripts; the public repo is one
+#: `curl` away). Disallowing WebSearch/WebFetch alone is not a boundary. The current
+#: task suite needs at most the Skill tool (t1 is JSON-only, t3's source is embedded
+#: in the prompt, t4's reference arrives via Skill), so cells run tool-minimal;
+#: a future agentic task must explicitly relax this via ``disallowed_tools``.
+HERMETIC_DISALLOWED_TOOLS: tuple[str, ...] = (
+    "Bash",
+    "Read",
+    "Grep",
+    "Glob",
+    "Task",
+    "WebSearch",
+    "WebFetch",
+    "Write",
+    "Edit",
+    "NotebookEdit",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +193,7 @@ class ClaudeCodeRunner:
     timeout_s: float = 900.0
     max_budget_usd: float | None = None
     permission_mode: str | None = None
+    disallowed_tools: tuple[str, ...] = HERMETIC_DISALLOWED_TOOLS
 
     def _argv(
         self,
@@ -191,15 +214,15 @@ class ClaudeCodeRunner:
             effort,
             "--output-format",
             "json",
-            # Hermetic cells (2026-07-02 checkpoint review): drop the user's MCP servers
-            # and web tools so a cell can only act on its worktree. The A/B control arm
-            # must have no path to fetch the (publicly hosted) gold text; headless
-            # default-deny alone is a policy, not a construction. Skill/file tools remain.
+            # Hermetic cells (2026-07-02 checkpoint review + extended-pilot probe): no
+            # user MCP servers, and the escape-surface tools are disallowed so a cell
+            # can only see its prompt, its cwd-loaded memory/skills, and the Skill tool.
+            # The A/B control arm must have no path to its gold — which is public in
+            # this repo and present in prior sessions' transcripts on the host.
             "--strict-mcp-config",
-            "--disallowedTools",
-            "WebSearch",
-            "WebFetch",
         ]
+        if self.disallowed_tools:
+            argv += ["--disallowedTools", *self.disallowed_tools]
         if json_schema is not None:
             argv += ["--json-schema", json.dumps(json_schema)]
         if self.max_budget_usd is not None:

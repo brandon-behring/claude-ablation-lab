@@ -61,13 +61,19 @@ matched (model, effort) config pairs) runs under the following rules, fixed in a
   **2 resume passes** (`ablation run` re-invocations; settled cells skip) for
   `rate_limited`/`timeout`/`infra_error` cells, then whatever remains is published as-is
   with its failure rate.
-- **Hermetic cells:** every cell runs with `--strict-mcp-config` (no user MCP servers) and
-  `--disallowedTools WebSearch WebFetch` — the control arm must have no path to the gold
-  text (which is public in this repo), and that is enforced by construction, not by
-  default-deny policy. The showcase sweep also materializes worktrees **outside** the
-  harness repo (`--worktree-base`) so the harness's own `CLAUDE.md` is not ancestor memory
-  for any cell. The in-repo fixture README is neutral: the subject model is never told the
-  experiment design, its arm, or the expected outcome.
+- **Hermetic cells (tool-minimal by construction):** every cell runs with
+  `--strict-mcp-config` (no user MCP servers) and disallows the full escape surface —
+  `Bash Read Grep Glob Task WebSearch WebFetch Write Edit NotebookEdit` — so a cell sees
+  only its prompt, its worktree's auto-loaded memory/skills, and the `Skill` tool. This
+  is not paranoia: in the extended pilot, a control-arm opus cell *ran Bash* under
+  headless defaults and grepped beyond its worktree, locating host files that contain
+  the gold (prior sessions' transcripts; the public repo is one `curl` away). Web-tool
+  denial alone is not a boundary. The showcase sweep also materializes worktrees
+  **outside** the harness repo (`--worktree-base`) so the harness's own `CLAUDE.md` is
+  not ancestor memory for any cell, and the fixture README is neutral: the subject model
+  is never told the experiment design, its arm, or the expected outcome. (The ledger's
+  `mcp_servers` provenance field records what the *host environment* configures, not
+  what a cell loads — cells load none.)
 
 ## Audit trail
 

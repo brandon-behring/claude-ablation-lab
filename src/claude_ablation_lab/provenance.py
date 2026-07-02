@@ -5,8 +5,9 @@ The talk's reproducibility discipline: a result is only comparable if you know
 
 - ``claude_version`` — the CLI build under test.
 - ``harness_sha`` — this harness's git commit (the grader/runner code).
-- ``mcp_servers`` — the MCP server set Claude loads (captured with auth stripped,
-  matching the runner's subprocess view).
+- ``mcp_servers`` — the MCP server set the *host environment* configures (captured with
+  auth stripped). Cells themselves load none: the runner passes ``--strict-mcp-config``.
+  Recorded so a nonempty host config is visible provenance, not hidden state.
 - ``global_layer`` — a coarse digest of the constant global ``~/.claude`` config
   layer (v1 holds it fixed and varies only the per-variant *project* layer).
 

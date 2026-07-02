@@ -77,11 +77,17 @@ def test_argv_includes_core_flags_and_optionals() -> None:
     for flag in ("--model", "--effort", "--output-format", "--max-budget-usd", "--permission-mode"):
         assert flag in argv
     assert argv[argv.index("--output-format") + 1] == "json"
-    # Hermeticity flags ride on EVERY cell: no user MCP servers, no web tools (the A/B
-    # control arm must have no path to its publicly hosted gold — checkpoint review).
+    # Hermeticity flags ride on EVERY cell: no user MCP servers, and the full escape
+    # surface (exec/fs-read/net/delegation) disallowed — a live probe showed a control
+    # cell running Bash and locating its own gold outside the worktree.
     assert "--strict-mcp-config" in argv
     i = argv.index("--disallowedTools")
-    assert argv[i + 1 : i + 3] == ["WebSearch", "WebFetch"]
+    from claude_ablation_lab.runner import HERMETIC_DISALLOWED_TOOLS
+
+    assert tuple(argv[i + 1 : i + 1 + len(HERMETIC_DISALLOWED_TOOLS)]) == HERMETIC_DISALLOWED_TOOLS
+    for escape in ("Bash", "Read", "Grep", "Glob", "Task", "WebSearch", "WebFetch"):
+        assert escape in HERMETIC_DISALLOWED_TOOLS
+    assert "Skill" not in HERMETIC_DISALLOWED_TOOLS  # the treatment arm's mechanism stays
 
 
 @pytest.mark.unit

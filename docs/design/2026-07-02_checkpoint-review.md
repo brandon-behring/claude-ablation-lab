@@ -62,6 +62,33 @@ TOOL_USE: Skill | input: {"skill": "project-reference"}
 (session f20041c4…, worktree `.demo-infra@bab3a09`; the without-skill cell made zero tool calls and
 returned `{"claims":[]}` with "The 'project-reference' skill is not listed in my available skills.")
 
+## Addendum: extended-pilot probe finding (post-review, same day)
+
+The ratified fix package's extended pilot surfaced a hole **none of the three voices fully
+called**: headless cells execute `Bash` under default permissions. The round-1 opus/high
+control cell ran `find` + `grep -rli "project vega"` beyond its worktree and **located host
+files containing its own gold** — prior with-skill sessions' transcripts under
+`~/.claude/projects/` (every Skill launch writes the reference text into a transcript on
+this machine), with the public repo one `curl` away. It still answered an honest empty list
+(value 0.0), but the leak path was real, and `--disallowedTools WebSearch WebFetch` does not
+close it (the nearest voice finding — "default-deny luck" — understated it: default-deny
+doesn't even apply to Bash).
+
+**Fix:** cells are now tool-minimal by construction — `HERMETIC_DISALLOWED_TOOLS`
+(`Bash Read Grep Glob Task WebSearch WebFetch Write Edit NotebookEdit`) rides on every
+cell's argv; the current task suite needs at most `Skill` (t1 JSON-only, t3
+prompt-embedded, t4 skill-delivered), and future agentic tasks must explicitly relax
+`ClaudeCodeRunner.disallowed_tools`.
+
+**Round-2 pilot (4 cells, session-level verification):** both control cells made **zero**
+tool calls (opus dropped from 3 exploration turns to 1) and graded honest 0.0 `ok`; both
+treatment cells made exactly **one** tool call — `Skill {"skill": "project-reference"}` —
+and scored 1.0. The A/B's only observable tool action is the mechanism under test.
+
+Extended-pilot ledger evidence: round 1 (5 cells: t4 pairs at haiku/low + opus/high — first
+opus cells ever — plus t3 haiku/low at 1.0 under grader v2, all `ok`) and round 2 (4 cells,
+above). Probe-tier quota spent across the checkpoint: 12 cells total.
+
 ## Outcome
 
 Review recommendation: **go, conditional on the fix package** (wording, first-run-primacy
