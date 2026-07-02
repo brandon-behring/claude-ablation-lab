@@ -43,11 +43,15 @@ DEFAULT_AGENT_PERMISSION_MODE = "acceptEdits"
 class Prepared:
     """A task made concrete for one run+grade cycle.
 
-    ``spec_sha`` fingerprints the *gradeable identity* (prompt + json_schema +
-    gold). It is stamped on every ledger row and gates resume/re-grade: if a
-    task's prompt, schema, seed/subsample, or gold changes, the fingerprint
-    changes, so a stored run is never silently reused for — nor graded against —
-    a different spec (the Phase-3 analog of the run/grade honesty split).
+    ``spec_sha`` fingerprints the *gradeable identity* (prompt + json_schema + gold
+    + declared tools). It is stamped on every ledger row and gates resume/re-grade:
+    if a task's prompt, schema, seed/subsample, gold, or tool policy changes, the
+    fingerprint changes, so a stored run is never silently reused for — nor graded
+    against — a different spec (the Phase-3 analog of the run/grade honesty split).
+    Tool policy joined this fingerprint in D6 (review finding): unlike
+    ``permission_mode`` (execution friction only), a task's tool set changes *what
+    the cell can even do* — reusing a run from before a ``tools:`` change would
+    silently compare results measured under different tool boundaries.
     """
 
     prompt: str
@@ -56,16 +60,22 @@ class Prepared:
     artifact: str | None = None
     permission_mode: str | None = None
     #: Per-cell ``--disallowedTools`` override. ``None`` → the runner's own default
-    #: (the hermetic tool-minimal set). Never in ``spec_sha``: an execution knob, like
-    #: ``permission_mode``, not part of the cell's gradeable identity.
+    #: (the hermetic tool-minimal set). Not itself hashed into ``spec_sha`` — it's a
+    #: pure function of ``Task.tools`` (+ the catalog), and ``Task.tools`` is what's
+    #: hashed instead, as the actual declared source of intent.
     disallowed_tools: tuple[str, ...] | None = None
     spec_sha: str = ""
 
 
-def spec_sha(prompt: str, json_schema: dict[str, Any] | None, gold: Mapping[str, Any]) -> str:
-    """16-hex fingerprint of a cell's gradeable inputs (prompt + schema + gold)."""
+def spec_sha(
+    prompt: str,
+    json_schema: dict[str, Any] | None,
+    gold: Mapping[str, Any],
+    tools: tuple[str, ...] = (),
+) -> str:
+    """16-hex fingerprint of a cell's gradeable inputs (prompt + schema + gold + tools)."""
     blob = json.dumps(
-        {"prompt": prompt, "schema": json_schema, "gold": gold},
+        {"prompt": prompt, "schema": json_schema, "gold": gold, "tools": tools},
         sort_keys=True,
         default=str,
     )
@@ -140,4 +150,4 @@ def prepare_task(task: Task) -> Prepared:
             f"no preparer for grader {task.grader!r} (known: {', '.join(_PREPARERS)})"
         ) from None
     prep = preparer(task)
-    return replace(prep, spec_sha=spec_sha(prep.prompt, prep.json_schema, prep.gold))
+    return replace(prep, spec_sha=spec_sha(prep.prompt, prep.json_schema, prep.gold, task.tools))

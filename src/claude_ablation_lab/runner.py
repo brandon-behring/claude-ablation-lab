@@ -48,30 +48,47 @@ AUTH_ENV_STRIP: tuple[str, ...] = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 #: 1. **Live-confirmed** (42 names): passing a name to ``--disallowedTools`` that the
 #:    CLI doesn't recognize prints ``Permission deny rule "<X>" matches no known
 #:    tool`` to stderr but still runs (exit 0) — so a real probe with ~40 candidates
-#:    cleanly separates real names from typos/renames at zero risk (over-denying a
-#:    name is a no-op, never an error). ``DesignSync`` (1 name) came from a live
-#:    ``--output-format stream-json`` session's ``system/init`` event, which reports
-#:    a ``tools`` array — a second, independent live source (see the D6.2 backlog
-#:    note in ``docs/design/2026-07-01_phase6-deferrals.md`` for why that array isn't
-#:    used as the primary catalog: it disagrees with the probe on a few names, e.g.
-#:    it omits ``Grep``/``Glob``, and that discrepancy isn't understood yet).
-#: 2. **Docs-only, not individually live-tested** (3 names): ``Agent``,
-#:    ``AskUserQuestion``, ``StructuredOutput`` — confirmed real by Anthropic's
-#:    tools-reference docs, folded in defensively (same zero-cost-to-over-deny logic).
+#:    cleanly separates real names from typos/renames at zero risk (the invocation
+#:    itself is never broken by an unrecognized name). ``DesignSync`` (1 name) came
+#:    from a live ``--output-format stream-json`` session's ``system/init`` event,
+#:    which reports a ``tools`` array — a second, independent live source (see the
+#:    D6.2 backlog note in ``docs/design/2026-07-01_phase6-deferrals.md`` for why
+#:    that array isn't used as the primary catalog: it disagrees with the probe on a
+#:    few names, e.g. it omits ``Grep``/``Glob``).
+#: 2. **Docs-only, not individually live-tested** (2 names): ``Agent``,
+#:    ``AskUserQuestion`` — confirmed real by Anthropic's tools-reference docs.
 #:
-#: This same probe caught a live bug: ``"SlashCommand"``, previously in this tuple, is
-#: a confirmed-fake name (identical "matches no known tool" warning as a deliberately
-#: made-up control) — dead code providing zero protection, likely since some past CLI
-#: version renamed/removed it. It is *not* replaced 1:1: ``--help`` confirms
-#: ``--disable-slash-commands`` — the only flag governing that surface — also disables
-#: **all Skills** ("Skills still resolve via /skill-name" per ``--bare``'s own
-#: description; a live ``system/init`` event lists ``research-plan`` in both
-#: ``skills`` and ``slash_commands``, confirming they share one resolution path in
-#: this CLI version). Using it here would silently zero out the with-skill treatment
-#: arm — the exact failure mode the 2026-07-02 checkpoint review was built to catch.
-#: There is currently **no way to block user-level ``~/.claude/commands`` injection
-#: without also disabling Skill** — recorded as a residual gap, not silently dropped
-#: (D6.1 in the deferrals doc).
+#: **Important nuance, found via ``StructuredOutput`` (see below): "matches no known
+#: tool" is a validator/linting message, not proof a deny rule is inert.** A follow-up
+#: probe denied ``StructuredOutput`` specifically — same "unknown tool" warning as a
+#: deliberately-fake control name — yet the model's structured-output tool call was
+#: then actually rejected at runtime ("permission was denied"). So an unrecognized
+#: name can still functionally match at call time; "unknown to the validator" only
+#: means it's safe to *include* (never breaks the invocation itself), not that
+#: denying it has no effect. Two consequences:
+#:
+#: - ``StructuredOutput`` is real and load-bearing: ``--json-schema`` (T1's batched
+#:   verdict schema) is implemented as a synthetic ``StructuredOutput`` tool call
+#:   (confirmed live: the transcript shows ``tool_use`` with ``name: "StructuredOutput"``).
+#:   Denying it silently breaks every ``json_schema`` cell. It is excluded from
+#:   ``HERMETIC_DISALLOWED_TOOLS`` below, the same treatment as ``Skill`` — a
+#:   response-shaping mechanism the harness itself requested, not an escape-surface
+#:   tool a cell could use to read/write/exfiltrate.
+#: - ``"SlashCommand"``, previously in this tuple, is a confirmed-fake name — but *not*
+#:   solely on the "unknown tool" evidence above (which, per this nuance, wouldn't be
+#:   dispositive on its own). The real evidence: the published showcase's 54-session
+#:   harvest (`docs/design/2026-07-02_pr11-review.md`) shows all 18 with-skill cells
+#:   invoked ``Skill`` successfully *while `"SlashCommand"` sat in this exact deny
+#:   list* — so whatever it does or doesn't match, it demonstrably never blocked the
+#:   one thing it might have been guarding. It is dead weight, removed. It is *not*
+#:   replaced 1:1: ``--help`` confirms ``--disable-slash-commands`` — the only flag
+#:   governing that surface — also disables **all Skills** ("Skills still resolve via
+#:   /skill-name" per ``--bare``'s own description; a live ``system/init`` event lists
+#:   ``research-plan`` in both ``skills`` and ``slash_commands``, confirming they share
+#:   one resolution path in this CLI version). Using it here would silently zero out
+#:   the with-skill treatment arm. There is currently **no way to block user-level
+#:   ``~/.claude/commands`` injection without also disabling Skill** — recorded as a
+#:   residual gap, not silently dropped (D6.1 in the deferrals doc).
 KNOWN_BUILTIN_TOOLS: tuple[str, ...] = (
     "Agent",
     "Artifact",
@@ -128,16 +145,27 @@ KNOWN_BUILTIN_TOOLS: tuple[str, ...] = (
 #: don't silently trust a stale list) unless ``--allow-unverified-tools`` is passed.
 CATALOG_VERIFIED_CLAUDE_VERSION = "2.1.198"
 
+#: Tools kept out of every cell's deny list — not the escape surface, but mechanisms
+#: the harness itself relies on. ``Skill`` is the treatment mechanism under test.
+#: ``StructuredOutput`` is how ``--json-schema`` is actually implemented (a synthetic
+#: tool call, confirmed live — see the catalog docstring above); denying it silently
+#: breaks every schema-based cell (T1). Neither can read/write/exec/network on its
+#: own, so excluding them doesn't reopen the escape surface the rest of the deny
+#: list closes.
+_ALWAYS_ALLOWED: frozenset[str] = frozenset({"Skill", "StructuredOutput"})
+
 #: Tools disallowed in every cell by default: the exec / filesystem-read / network /
-#: delegation escape surface — every known built-in tool except ``Skill``. A live
-#: probe (2026-07-02 extended pilot) showed headless cells CAN run Bash — a
+#: delegation escape surface — every known built-in tool except `_ALWAYS_ALLOWED`. A
+#: live probe (2026-07-02 extended pilot) showed headless cells CAN run Bash — a
 #: control-arm cell grepped beyond its worktree and located files containing its own
 #: gold (prior sessions' transcripts; the public repo is one `curl` away). The
-#: current task suite needs at most the Skill tool (t1 is JSON-only, t3's source is
-#: embedded in the prompt, t4's reference arrives via Skill), so cells run
-#: tool-minimal by default; an agentic task relaxes this per-task via
-#: ``Task.tools``/``Prepared.disallowed_tools`` (see ``prepare.py``).
-HERMETIC_DISALLOWED_TOOLS: tuple[str, ...] = tuple(t for t in KNOWN_BUILTIN_TOOLS if t != "Skill")
+#: current task suite needs at most the Skill tool (t1 is JSON-only via
+#: StructuredOutput, t3's source is embedded in the prompt, t4's reference arrives
+#: via Skill), so cells run tool-minimal by default; an agentic task relaxes this
+#: per-task via ``Task.tools``/``Prepared.disallowed_tools`` (see ``prepare.py``).
+HERMETIC_DISALLOWED_TOOLS: tuple[str, ...] = tuple(
+    t for t in KNOWN_BUILTIN_TOOLS if t not in _ALWAYS_ALLOWED
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -156,13 +184,17 @@ class RunResult:
     usage: dict[str, Any]
     transcript_path: str | None
     raw: dict[str, Any] | None
-    #: Ordered tool names from ``tool_use`` content blocks — mechanism evidence,
-    #: populated only when the runner captured ``stream-json`` (see
-    #: ``ClaudeCodeRunner.capture_mechanism``). Empty for a plain ``json`` run: that
-    #: format has no per-tool events, and empty must not be misread as "used no
-    #: tools" (supersedes the now-impossible post-hoc ``~/.claude/projects`` harvest,
-    #: since cells run ``--no-session-persistence``).
-    tools_used: tuple[str, ...] = ()
+    #: Ordered tool names from ``tool_use`` content blocks — mechanism evidence.
+    #: ``None`` means *not measured* (plain ``json`` format has no per-tool events —
+    #: ``ClaudeCodeRunner.capture_mechanism=False``, or the run failed before any
+    #: events parsed); ``()`` means *measured, zero tool calls*. Collapsing these
+    #: (review finding, D6) would make "we didn't look" indistinguishable from "we
+    #: looked and saw nothing" — exactly the kind of overclaim this project has been
+    #: burned by before (PR #11's "control cells make zero tool calls" needed the
+    #: full session harvest to state precisely). Supersedes the now-impossible
+    #: post-hoc ``~/.claude/projects`` harvest, since cells run
+    #: ``--no-session-persistence``.
+    tools_used: tuple[str, ...] | None = None
 
 
 @runtime_checkable
@@ -283,7 +315,7 @@ def result_from_payload(
     latency_s: float,
     transcript_path: str | None,
     returncode: int | None = None,
-    tools_used: tuple[str, ...] = (),
+    tools_used: tuple[str, ...] | None = None,
 ) -> RunResult:
     """Build a RunResult from a parsed JSON payload (pure; unit-tested on fixtures).
 
@@ -476,7 +508,7 @@ class ClaudeCodeRunner:
         if self.capture_mechanism:
             payload, tools_used = parse_stream_json(proc.stdout)
         else:
-            payload, tools_used = extract_json(proc.stdout), ()
+            payload, tools_used = extract_json(proc.stdout), None  # not measured, not "zero"
         tp = self._write_transcript(
             run_id,
             {

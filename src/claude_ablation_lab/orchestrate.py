@@ -333,7 +333,12 @@ def _build_row(
         infra_sha=infra_sha,
         global_layer=provenance.global_layer,
         mcp_servers=provenance.mcp_servers,
-        tool_calls=dict(Counter(run_result.tools_used)),
+        # None (not measured) vs {} (measured, zero calls) must survive to the ledger —
+        # Counter(None) would raise, and Counter(()) -> {} is the correct "measured
+        # zero" case, so only the None branch needs an explicit guard.
+        tool_calls=(
+            dict(Counter(run_result.tools_used)) if run_result.tools_used is not None else None
+        ),
     )
 
 

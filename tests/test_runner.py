@@ -294,12 +294,38 @@ def test_argv_none_disallowed_tools_falls_back_to_instance_default() -> None:
 
 @pytest.mark.unit
 def test_known_builtin_tools_catalog_covers_hermetic_deny_list() -> None:
-    # Fail-closed regression guard (D6): every known tool except Skill must be
-    # denied by default. Structurally guaranteed today (HERMETIC_DISALLOWED_TOOLS is
-    # DERIVED from KNOWN_BUILTIN_TOOLS) — this test exists so a future refactor that
-    # hardcodes either tuple independently breaks loudly instead of silently drifting.
-    assert set(KNOWN_BUILTIN_TOOLS) - {"Skill"} <= set(HERMETIC_DISALLOWED_TOOLS)
-    assert "Skill" in KNOWN_BUILTIN_TOOLS and "Skill" not in HERMETIC_DISALLOWED_TOOLS
+    # Fail-closed regression guard (D6): every known tool except the always-allowed
+    # set (Skill — the treatment mechanism; StructuredOutput — how --json-schema is
+    # actually implemented, confirmed live) must be denied by default. Structurally
+    # guaranteed today (HERMETIC_DISALLOWED_TOOLS is DERIVED from KNOWN_BUILTIN_TOOLS)
+    # — this test exists so a future refactor that hardcodes either tuple
+    # independently breaks loudly instead of silently drifting.
+    always_allowed = {"Skill", "StructuredOutput"}
+    assert set(KNOWN_BUILTIN_TOOLS) - always_allowed <= set(HERMETIC_DISALLOWED_TOOLS)
+    assert always_allowed <= set(KNOWN_BUILTIN_TOOLS)
+    assert not always_allowed & set(HERMETIC_DISALLOWED_TOOLS)
+
+
+@pytest.mark.unit
+def test_structured_output_denial_would_break_json_schema_regression_guard() -> None:
+    # A live probe (2026-07-02) found --json-schema is implemented as a synthetic
+    # StructuredOutput tool call — denying it breaks T1 silently (confirmed: the
+    # model's structured-output call gets rejected, "permission was denied", even
+    # though the invocation itself doesn't crash). This is the regression guard for
+    # that fix: the hermetic default must never deny it.
+    assert "StructuredOutput" not in HERMETIC_DISALLOWED_TOOLS
+
+
+@pytest.mark.unit
+def test_argv_json_schema_and_disallowed_tools_never_deny_structured_output() -> None:
+    # Even a caller-supplied disallowed_tools override should never accidentally
+    # break schema cells — the default catalog is the source of truth for this, but
+    # assert the actual argv a schema-bearing cell gets never carries the denial.
+    argv = ClaudeCodeRunner()._argv("p", "haiku", "low", json_schema={"type": "object"})
+    i = argv.index("--disallowedTools")
+    tools = argv[i + 1 : argv.index("--json-schema")]
+    assert "StructuredOutput" not in tools
+    assert "Skill" not in tools  # sanity: still not the treatment mechanism itself
 
 
 @pytest.mark.unit
@@ -413,7 +439,7 @@ def test_run_with_capture_mechanism_populates_tools_used(
 
 
 @pytest.mark.unit
-def test_run_without_capture_mechanism_leaves_tools_used_empty(
+def test_run_without_capture_mechanism_leaves_tools_used_none(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     success = (FIXTURES / "claude_json_success.json").read_text()
@@ -424,4 +450,87 @@ def test_run_without_capture_mechanism_leaves_tools_used_empty(
         "hi", model="haiku", effort="low", cwd=tmp_path
     )
     assert res.status == "ok"
-    assert res.tools_used == ()  # plain json format has no per-tool events to report
+    # None ("not measured"), never () — plain json format has no per-tool events to
+    # report, and that must not be misread as "measured, zero tool calls" (D6 fix).
+    assert res.tools_used is None
+
+
+@pytest.mark.unit
+def test_argv_capture_mechanism_and_json_schema_together_never_deny_structured_output() -> None:
+    # T1 is the only json_schema task, and a real sweep now defaults to
+    # capture_mechanism=True — this exact combination (review finding, confirmed by
+    # execution: --json-schema is implemented as a synthetic StructuredOutput tool
+    # call, and denying it makes the model's structured-output attempt fail with
+    # "permission was denied") must never regress.
+    argv = ClaudeCodeRunner(capture_mechanism=True)._argv(
+        "p", "haiku", "low", json_schema={"type": "object"}
+    )
+    assert argv[argv.index("--output-format") + 1] == "stream-json"
+    i = argv.index("--disallowedTools")
+    tools = argv[i + 1 : argv.index("--json-schema")]
+    assert "StructuredOutput" not in tools
+
+
+@pytest.mark.unit
+def test_run_capture_mechanism_and_json_schema_together_extracts_structured_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A synthetic stream-json capture modeled on two real, directly-observed probes
+    # (2026-07-02, v2.1.198): one where StructuredOutput fires cleanly (result
+    # carries the schema-shaped JSON), one where denying it produces a
+    # "permission was denied" text response instead of the tool_use block below —
+    # this fixture is the FIRST (allowed) case, proving the parse path stays correct
+    # once StructuredOutput is excluded from the deny list.
+    events = [
+        {
+            "type": "assistant",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_1",
+                        "name": "StructuredOutput",
+                        "input": {"classifications": [{"idx": 0, "label": 1}]},
+                    }
+                ]
+            },
+        },
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {
+                        "tool_use_id": "toolu_1",
+                        "type": "tool_result",
+                        "content": "Structured output provided successfully",
+                    }
+                ]
+            },
+        },
+        {
+            "type": "result",
+            "subtype": "success",
+            "is_error": False,
+            "result": '{"classifications": [{"idx": 0, "label": 1}]}',
+            "session_id": "s",
+            "total_cost_usd": 0.01,
+            "num_turns": 2,
+            "usage": {},
+            "structured_output": {"classifications": [{"idx": 0, "label": 1}]},
+        },
+    ]
+    stream_text = "\n".join(json.dumps(e) for e in events)
+    monkeypatch.setattr(
+        "claude_ablation_lab.runner.subprocess.run",
+        lambda *a, **k: _fake_proc(stream_text),
+    )
+    res = ClaudeCodeRunner(transcript_dir=tmp_path, capture_mechanism=True).run(
+        "classify",
+        model="haiku",
+        effort="low",
+        cwd=tmp_path,
+        json_schema={"type": "object"},
+    )
+    assert res.status == "ok"
+    assert res.tools_used == ("StructuredOutput",)
+    assert json.loads(res.output) == {"classifications": [{"idx": 0, "label": 1}]}

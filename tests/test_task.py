@@ -52,6 +52,28 @@ def test_tools_loads_from_yaml_list(tmp_path: Path) -> None:
 
 
 @pytest.mark.unit
+def test_tools_rejects_a_bare_scalar_instead_of_a_list(tmp_path: Path) -> None:
+    # A real footgun: `tools: Bash` parses as the STRING "Bash", and iterating a
+    # string yields characters — silently becomes ('B','a','s','h') without this
+    # guard, denying everything and relaxing nothing while claiming success.
+    spec = tmp_path / "scalar.yaml"
+    spec.write_text("id: x\ndomain: y\ngrader: validator\nmode: agent\ntools: Bash\n")
+    with pytest.raises(ValueError, match="must be a YAML list"):
+        load_task(spec)
+
+
+@pytest.mark.unit
+def test_tools_rejects_unknown_tool_names(tmp_path: Path) -> None:
+    # A typo here would otherwise silently relax nothing (prepare.py's subtraction
+    # never matches an unknown name) while the CLI still claims the tools were
+    # relaxed — fail loud at load time instead.
+    spec = tmp_path / "typo.yaml"
+    spec.write_text("id: x\ndomain: y\ngrader: validator\nmode: agent\ntools: [Bahs]\n")
+    with pytest.raises(ValueError, match="unknown tool"):
+        load_task(spec)
+
+
+@pytest.mark.unit
 def test_t3_source_templated_and_json_braces_survive() -> None:
     task = {t.id: t for t in load_all(TASKS_DIR)}["t3_verbatim_anchor"]
     assert "Efron" in task.prompt  # {source_text} was substituted

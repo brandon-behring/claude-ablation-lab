@@ -74,16 +74,31 @@ def test_jsonl_roundtrip_tool_calls_is_a_string_on_disk_like_subscores(tmp_path)
 
 
 @pytest.mark.unit
-def test_tool_calls_defaults_empty_so_old_rows_without_it_still_load(tmp_path) -> None:
+def test_tool_calls_defaults_none_so_old_rows_without_it_still_load(tmp_path) -> None:
     # A row written before D6 (no tool_calls key at all) must still load — same
     # reason session_id got a default: the published showcase ledger predates this
-    # field and must stay loadable.
+    # field and must stay loadable. Defaults to None ("not measured"), not {} —
+    # an old row genuinely has no mechanism evidence, which is a different claim
+    # from "measured, zero tool calls".
     path = tmp_path / "ledger.jsonl"
     raw = _row().to_jsonl_dict()
     del raw["tool_calls"]
     path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
     [loaded] = load_rows(path)
-    assert loaded.tool_calls == {}
+    assert loaded.tool_calls is None
+
+
+@pytest.mark.unit
+def test_tool_calls_none_vs_empty_dict_round_trip_distinctly(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    append_row(path, _row(run_id="not-measured", tool_calls=None))
+    append_row(path, _row(run_id="measured-zero", tool_calls={}))
+    raw_lines = [json.loads(ln) for ln in path.read_text(encoding="utf-8").splitlines()]
+    assert raw_lines[0]["tool_calls"] == "null"
+    assert raw_lines[1]["tool_calls"] == "{}"
+    loaded = load_rows(path)
+    assert loaded[0].tool_calls is None
+    assert loaded[1].tool_calls == {}
 
 
 @pytest.mark.unit

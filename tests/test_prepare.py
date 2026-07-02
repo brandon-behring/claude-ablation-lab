@@ -103,11 +103,14 @@ def test_prepare_validator_relaxes_declared_tools_from_hermetic_default() -> Non
     for allowed in ("Read", "Write", "Bash"):
         assert allowed not in prep.disallowed_tools
     assert "Skill" not in prep.disallowed_tools  # already excluded from the base catalog
-    # Not part of the cell's gradeable identity — same spec_sha regardless of tools.
-    same_tools = prepare_task(
+    # Tool policy DOES change the cell's gradeable identity (D6 review finding):
+    # unlike permission_mode, it changes what the cell can even do, so a resume
+    # against an old ledger row from before a tools: change must not silently
+    # reuse output measured under a different tool boundary.
+    no_tools = prepare_task(
         Task(id="t2", domain="r", grader="validator", mode="agent", prompt="/research-plan x")
     )
-    assert prep.spec_sha == same_tools.spec_sha
+    assert prep.spec_sha != no_tools.spec_sha
 
 
 @pytest.mark.unit
@@ -151,3 +154,21 @@ def test_spec_sha_is_stable_and_changes_with_gold() -> None:
     different = prepare_task(anchor("xyz")).spec_sha
     assert same_a and same_a == same_b  # deterministic for identical spec
     assert same_a != different  # a gold change changes the fingerprint
+
+
+@pytest.mark.unit
+def test_spec_sha_changes_with_declared_tools() -> None:
+    def validator(tools: tuple[str, ...]) -> Task:
+        return Task(
+            id="t2",
+            domain="r",
+            grader="validator",
+            mode="agent",
+            prompt="/research-plan x",
+            tools=tools,
+        )
+
+    none = prepare_task(validator(())).spec_sha
+    some = prepare_task(validator(("Read",))).spec_sha
+    more = prepare_task(validator(("Read", "Write"))).spec_sha
+    assert len({none, some, more}) == 3  # each distinct tool set is a distinct spec

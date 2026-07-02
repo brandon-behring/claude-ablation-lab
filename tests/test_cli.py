@@ -147,7 +147,7 @@ def _estimate(status: str) -> object:
 @pytest.mark.unit
 def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
     from claude_ablation_lab import orchestrate
-    from claude_ablation_lab.runner import ClaudeCodeRunner
+    from claude_ablation_lab.runner import CATALOG_VERIFIED_CLAUDE_VERSION, ClaudeCodeRunner
 
     captured: dict[str, object] = {}
 
@@ -157,6 +157,12 @@ def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
         return _estimate("ok")
 
     monkeypatch.setattr(orchestrate, "estimate_sweep", _stub)
+    # CI has no `claude` binary at all (claude_version() -> None) — estimate now
+    # shares run's version gate (D6), so this must not depend on what's installed
+    # on the machine running the test.
+    monkeypatch.setattr(
+        "claude_ablation_lab.provenance.claude_version", lambda: CATALOG_VERIFIED_CLAUDE_VERSION
+    )
     # Belt-and-braces: if a refactor ever makes the call-time import miss the patch,
     # fail loudly instead of silently invoking the real `claude` binary from pytest.
     monkeypatch.setattr(
@@ -315,6 +321,11 @@ def test_run_agent_task_without_declared_tools_warns(
 
 @pytest.mark.unit
 def test_estimate_bad_calibration_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    from claude_ablation_lab.runner import CATALOG_VERIFIED_CLAUDE_VERSION
+
+    monkeypatch.setattr(
+        "claude_ablation_lab.provenance.claude_version", lambda: CATALOG_VERIFIED_CLAUDE_VERSION
+    )
     monkeypatch.setattr(
         "claude_ablation_lab.orchestrate.estimate_sweep",
         lambda *a, **k: _estimate("halted"),
