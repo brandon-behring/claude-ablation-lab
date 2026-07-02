@@ -22,6 +22,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from claude_ablation_lab.runner import HERMETIC_DISALLOWED_TOOLS
 from claude_ablation_lab.task import Task
 
 __all__ = [
@@ -54,6 +55,10 @@ class Prepared:
     json_schema: dict[str, Any] | None = None
     artifact: str | None = None
     permission_mode: str | None = None
+    #: Per-cell ``--disallowedTools`` override. ``None`` → the runner's own default
+    #: (the hermetic tool-minimal set). Never in ``spec_sha``: an execution knob, like
+    #: ``permission_mode``, not part of the cell's gradeable identity.
+    disallowed_tools: tuple[str, ...] | None = None
     spec_sha: str = ""
 
 
@@ -94,12 +99,22 @@ def _prepare_classification(task: Task) -> Prepared:
 
 
 def _prepare_validator(task: Task) -> Prepared:
-    """T2: static ``/research-plan`` prompt; grade the captured ``research_plan.md``."""
+    """T2: static ``/research-plan`` prompt; grade the captured ``research_plan.md``.
+
+    Agentic tasks need real tools, so this is the one preparer that relaxes the
+    hermetic default: ``disallowed_tools`` = the base catalog *minus* whatever the
+    task declares via ``tools:`` (e.g. Bash/Read/Write/Edit for a file-writing skill).
+    A task declaring no ``tools`` gets the unmodified hermetic default back — agentic
+    but tool-minimal, which the CLI warns about (see ``cli/main.py``).
+    """
+    needed = set(task.tools)
+    effective = tuple(t for t in HERMETIC_DISALLOWED_TOOLS if t not in needed)
     return Prepared(
         prompt=task.prompt,
         gold=task.gold,
         artifact=str(task.params.get("artifact", DEFAULT_ARTIFACT)),
         permission_mode=str(task.params.get("permission_mode", DEFAULT_AGENT_PERMISSION_MODE)),
+        disallowed_tools=effective,
     )
 
 

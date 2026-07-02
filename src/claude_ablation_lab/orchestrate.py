@@ -24,6 +24,7 @@ import logging
 import os
 import tempfile
 import time
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -172,6 +173,7 @@ def run_with_backoff(
             cwd=cwd,
             json_schema=prepared.json_schema,
             permission_mode=prepared.permission_mode,
+            disallowed_tools=prepared.disallowed_tools,
         )
         if run_result.status != "rate_limited":
             return run_result
@@ -331,6 +333,7 @@ def _build_row(
         infra_sha=infra_sha,
         global_layer=provenance.global_layer,
         mcp_servers=provenance.mcp_servers,
+        tool_calls=dict(Counter(run_result.tools_used)),
     )
 
 

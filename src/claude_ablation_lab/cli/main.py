@@ -74,6 +74,23 @@ def run(
             "cells cannot see the harness's own CLAUDE.md as ancestor memory)"
         ),
     ] = None,
+    capture_mechanism: Annotated[
+        bool,
+        typer.Option(
+            "--capture-mechanism/--no-capture-mechanism",
+            help="Use --output-format stream-json to record which tools each cell "
+            "invoked (RunResult.tools_used → ledger tool_calls). On by default.",
+        ),
+    ] = True,
+    allow_unverified_tools: Annotated[
+        bool,
+        typer.Option(
+            "--allow-unverified-tools",
+            help="Skip the installed-CLI-version gate (see KNOWN_BUILTIN_TOOLS in "
+            "runner.py). Use only after re-verifying the tool catalog by hand against "
+            "the new claude version.",
+        ),
+    ] = False,
 ) -> None:
     """Execute the sweep sequentially, appending each cell to the ledger (resumable)."""
     tasks = _load_suite(suite, task)
@@ -96,24 +113,46 @@ def run(
 
     # Imported lazily so `--dry-run` / `--help` need no runner/grader dependencies.
     from claude_ablation_lab.orchestrate import run_sweep
-    from claude_ablation_lab.runner import ClaudeCodeRunner
+    from claude_ablation_lab.provenance import claude_version
+    from claude_ablation_lab.runner import CATALOG_VERIFIED_CLAUDE_VERSION, ClaudeCodeRunner
+
+    # Fail closed on CLI version drift (D6): HERMETIC_DISALLOWED_TOOLS is a hand-pinned
+    # catalog, verified once against a specific `claude` version — a later version may
+    # add/rename a tool the catalog doesn't know about, silently widening the escape
+    # surface. A real sweep must not trust a stale catalog without a human re-check.
+    installed = claude_version()
+    if installed != CATALOG_VERIFIED_CLAUDE_VERSION and not allow_unverified_tools:
+        console.print(
+            f"[red]installed claude {installed!r} != the catalog's verified "
+            f"{CATALOG_VERIFIED_CLAUDE_VERSION!r}[/red] — HERMETIC_DISALLOWED_TOOLS in "
+            "runner.py may be missing a tool the new version added. Re-verify the "
+            "catalog (see its docstring for the probe method), bump "
+            "CATALOG_VERIFIED_CLAUDE_VERSION, or pass --allow-unverified-tools to "
+            "proceed anyway."
+        )
+        raise typer.Exit(2)
 
     runner = ClaudeCodeRunner(
         transcript_dir=ledger.parent / "transcripts",
         timeout_s=timeout_s,
         max_budget_usd=max_budget_usd,
+        capture_mechanism=capture_mechanism,
     )
     from claude_ablation_lab.worktree import DEFAULT_BASE
 
-    # Cells run tool-minimal by default (HERMETIC_DISALLOWED_TOOLS) — an agent-mode
-    # task needs Bash/file tools and would spend its expensive cells scoring ~0 for
-    # harness reasons. Warn loudly; a per-task tool policy is backlog (deferrals D6).
+    # Cells run tool-minimal by default (HERMETIC_DISALLOWED_TOOLS). An agent-mode
+    # task that declares `tools:` gets exactly those relaxed (prepare.py); one that
+    # doesn't would spend its expensive cells scoring ~0 for harness reasons — warn.
     for selected in tasks:
-        if selected.mode == "agent" and selected.id in covered:
+        if selected.mode != "agent" or selected.id not in covered:
+            continue
+        if selected.tools:
+            console.print(f"{selected.id}: agent-mode, tools relaxed → {list(selected.tools)}")
+        else:
             console.print(
-                f"[red]{selected.id} is an agent-mode task but cells run tool-minimal "
-                "(Bash/file tools denied) — it will likely score ~0 for harness reasons. "
-                "Relax ClaudeCodeRunner.disallowed_tools to run agentic tasks.[/red]"
+                f"[red]{selected.id} is an agent-mode task with no `tools:` declared — "
+                "cells run tool-minimal and it will likely score ~0 for harness reasons. "
+                "Add a `tools:` list to its task YAML.[/red]"
             )
 
     console.print(f"running {len(cells)} cells → {ledger}")

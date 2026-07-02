@@ -41,6 +41,10 @@ class Task:
     params: Mapping[str, Any] = field(default_factory=dict)
     timeout_s: float = 900.0
     tags: tuple[str, ...] = ()
+    #: Tools this task needs beyond the always-allowed ``Skill`` (e.g. an agentic task's
+    #: ``[Bash, Read, Write, Edit, Glob, Grep]``). Empty for every non-agentic task today —
+    #: the hermetic default (deny all but Skill) already covers them. See :mod:`prepare`.
+    tools: tuple[str, ...] = ()
 
 
 def load_task(path: Path | str) -> Task:
@@ -68,6 +72,7 @@ def load_task(path: Path | str) -> Task:
         params=params,
         timeout_s=float(raw.get("timeout_s", 900.0)),
         tags=tuple(str(tag) for tag in (raw.get("tags") or ())),
+        tools=tuple(str(tool) for tool in (raw.get("tools") or ())),
     )
 
 

@@ -4,10 +4,11 @@ The raw ledger is a local artifact: its rows embed absolute paths
 (``output_path``/``transcript_path``), output previews, session ids, and host
 provenance (``mcp_servers``/``global_layer``) that have no place in a public repo.
 This module produces the committed ``results/showcase.jsonl``: showcase tasks only,
-private fields stripped, then a paranoid final scan — any absolute-path fragment or
-oversized string anywhere in a kept row is a hard error, never a warning. Failure
-rows (``rate_limited``/``timeout``/…) are kept: METHODOLOGY promises failure *rates*
-are always reported.
+only ``KEEP_FIELDS`` survive (an allow-list — a field not on it is excluded by
+default, not published-unless-remembered), then a paranoid final scan — any
+absolute-path fragment or oversized string anywhere in a kept row is a hard error,
+never a warning. Failure rows (``rate_limited``/``timeout``/…) are kept: METHODOLOGY
+promises failure *rates* are always reported.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ from typing import Any
 
 __all__ = [
     "SHOWCASE_TASKS",
-    "STRIP_FIELDS",
+    "KEEP_FIELDS",
     "MAX_STRING_LEN",
     "FORBIDDEN_FRAGMENTS",
     "sanitize_row",
@@ -29,28 +30,51 @@ __all__ = [
 #: a foreign task id means the wrong raw ledger was pointed at this script).
 SHOWCASE_TASKS: frozenset[str] = frozenset({"t3_verbatim_anchor", "t4_demo_infra"})
 
-#: Fields removed from every published row: model output (previews/grader details),
-#: local filesystem pointers, session identity, and host-environment provenance.
-#: ``infra_repo`` is here because live rows store it as a *resolved absolute path*
-#: (caught by this scanner's first real run); ``variant`` + ``infra_sha`` carry the
-#: reader-relevant provenance, analysis never reads ``infra_repo``.
-STRIP_FIELDS: tuple[str, ...] = (
-    "details",
-    "output_preview",
-    "output_path",
-    "transcript_path",
-    "session_id",
-    "mcp_servers",
-    "global_layer",
-    "infra_repo",
+#: The only fields a published row may carry: identity/config, scores, cost/latency,
+#: and provenance a reader can act on. Everything else is excluded **by default** —
+#: an allow-list (D6 inversion), not a hand-maintained deny-list, so a future ledger
+#: field is private-until-reviewed rather than public-unless-remembered. Deliberately
+#: excluded (was a hand-maintained ``STRIP_FIELDS`` deny-list before this inversion):
+#: ``details``/``output_preview`` (model output — grader internals, prompt/output
+#: text), ``output_path``/``transcript_path`` (local filesystem pointers),
+#: ``session_id`` (session identity), ``mcp_servers``/``global_layer`` (host-env
+#: provenance), and ``infra_repo`` (live rows store it as a *resolved absolute
+#: path* — caught by this scanner's first real run; ``variant``/``infra_sha``
+#: already carry the reader-relevant provenance).
+KEEP_FIELDS: frozenset[str] = frozenset(
+    {
+        "task_id",
+        "model",
+        "effort",
+        "variant",
+        "epoch",
+        "grader_version",
+        "run_id",
+        "run_status",
+        "cost_usd",
+        "latency_s",
+        "returncode",
+        "model_resolved",
+        "num_turns",
+        "grade_status",
+        "value",
+        "spec_sha",
+        "subscores",
+        "ts",
+        "claude_version",
+        "harness_sha",
+        "infra_sha",
+        "tool_calls",
+    }
 )
 
 #: No kept string may exceed this — long strings are how prompt/output text sneaks out.
 MAX_STRING_LEN = 200
 
 #: Substrings that mark a leaked local path (common Unix/macOS/Windows roots). This is a
-#: deny-list, not a parser — it exists on top of STRIP_FIELDS as a second net, and the
-#: kept fields are short structured values where any of these reads as a leak.
+#: deny-list, not a parser — it exists on top of KEEP_FIELDS as a second net (a field
+#: being on the allow-list doesn't guarantee its *value* is clean), and the kept fields
+#: are short structured values where any of these reads as a leak.
 FORBIDDEN_FRAGMENTS: tuple[str, ...] = (
     "/Users/",
     "/home/",
@@ -94,7 +118,7 @@ def sanitize_row(row: dict[str, Any]) -> dict[str, Any]:
             f"row for task {task_id!r} is not a showcase task {sorted(SHOWCASE_TASKS)} — "
             "wrong raw ledger?"
         )
-    kept = {key: value for key, value in row.items() if key not in STRIP_FIELDS}
+    kept = {key: value for key, value in row.items() if key in KEEP_FIELDS}
     _scan(kept, f"row[{task_id}]")
     return kept
 

@@ -43,7 +43,7 @@ RunKey = tuple[str, str, str, str, int]
 LedgerKey = tuple[str, str, str, str, int, str]
 
 # Persisted as JSON strings (see module docstring); decoded on load.
-_JSON_FIELDS = ("subscores", "details")
+_JSON_FIELDS = ("subscores", "details", "tool_calls")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +85,14 @@ class LedgerRow:
     infra_sha: str | None = None
     global_layer: str | None = None
     mcp_servers: tuple[str, ...] = ()
+    #: Mechanism evidence: tool name → invocation count, derived from the runner's
+    #: ``tools_used`` (empty dict, not a special marker, when the runner didn't
+    #: capture mechanism — see ``ClaudeCodeRunner.capture_mechanism``). Persisted as
+    #: a JSON string like ``subscores``/``details`` (see module docstring) — its key
+    #: set varies per row (a T4 control cell: ``{}``; a with-skill cell: ``{"Skill":
+    #: 1}``; a future T2 cell: ``{"Bash": 3, "Write": 1, "Skill": 1}``), the same
+    #: DuckDB-heterogeneity reason those two fields aren't native columns.
+    tool_calls: dict[str, int] = field(default_factory=dict)
 
     @property
     def run_key(self) -> RunKey:

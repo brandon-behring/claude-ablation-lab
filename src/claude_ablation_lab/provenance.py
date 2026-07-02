@@ -26,7 +26,7 @@ from pathlib import Path
 
 from claude_ablation_lab.runner import AUTH_ENV_STRIP
 
-__all__ = ["Provenance", "gather_provenance", "HARNESS_ROOT"]
+__all__ = ["Provenance", "gather_provenance", "HARNESS_ROOT", "claude_version"]
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +73,13 @@ def _run(argv: list[str], *, cwd: Path | None = None, timeout: float = 30.0) -> 
     return proc.stdout.strip() if proc.returncode == 0 else None
 
 
-def _claude_version() -> str | None:
-    """Parse ``claude --version`` (``"2.1.193 (Claude Code)"`` → ``"2.1.193"``)."""
+def claude_version() -> str | None:
+    """Parse ``claude --version`` (``"2.1.193 (Claude Code)"`` → ``"2.1.193"``).
+
+    Public (not just a :func:`gather_provenance` internal): ``cli/main.py``'s tool-
+    catalog version gate calls this directly — one cheap probe, not the full
+    provenance gather (which also shells out to ``git`` and ``claude mcp list``).
+    """
     out = _run(["claude", "--version"])
     return out.split()[0] if out else None
 
@@ -133,7 +138,7 @@ def gather_provenance(*, harness_repo: Path | None = None, home: Path | None = N
     repo = harness_repo or HARNESS_ROOT
     home = home or Path(os.path.expanduser("~"))
     return Provenance(
-        claude_version=_claude_version(),
+        claude_version=claude_version(),
         harness_sha=_harness_sha(repo),
         global_layer=_global_layer_digest(home),
         mcp_servers=_mcp_servers(),
