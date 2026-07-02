@@ -28,9 +28,49 @@ def test_load_all_seed_tasks() -> None:
     assert tasks["t2_research_plan"].mode == "agent"
     assert tasks["t1_prompt_injection"].infra_repo is None
     assert tasks["t4_demo_infra"].infra_repo is not None  # infra-sensitive (the demo A/B)
+    # D6: T2 declares exactly what its skill needs (matches its own SKILL.md
+    # allowed-tools frontmatter — see the task YAML's comment for the citation).
+    assert tasks["t2_research_plan"].tools == ("Read", "Write", "Bash")
+    assert tasks["t3_verbatim_anchor"].tools == ()  # single-turn tasks declare none
     for task in tasks.values():
         assert isinstance(task, Task)
         assert task.grader in {"classification", "validator", "anchor"}
+
+
+@pytest.mark.unit
+def test_tools_defaults_empty_when_absent_from_yaml(tmp_path: Path) -> None:
+    spec = tmp_path / "notools.yaml"
+    spec.write_text("id: x\ndomain: y\ngrader: anchor\nmode: single\n")
+    assert load_task(spec).tools == ()
+
+
+@pytest.mark.unit
+def test_tools_loads_from_yaml_list(tmp_path: Path) -> None:
+    spec = tmp_path / "withtools.yaml"
+    spec.write_text("id: x\ndomain: y\ngrader: validator\nmode: agent\ntools: [Read, Bash]\n")
+    assert load_task(spec).tools == ("Read", "Bash")
+
+
+@pytest.mark.unit
+def test_tools_rejects_a_bare_scalar_instead_of_a_list(tmp_path: Path) -> None:
+    # A real footgun: `tools: Bash` parses as the STRING "Bash", and iterating a
+    # string yields characters — silently becomes ('B','a','s','h') without this
+    # guard, denying everything and relaxing nothing while claiming success.
+    spec = tmp_path / "scalar.yaml"
+    spec.write_text("id: x\ndomain: y\ngrader: validator\nmode: agent\ntools: Bash\n")
+    with pytest.raises(ValueError, match="must be a YAML list"):
+        load_task(spec)
+
+
+@pytest.mark.unit
+def test_tools_rejects_unknown_tool_names(tmp_path: Path) -> None:
+    # A typo here would otherwise silently relax nothing (prepare.py's subtraction
+    # never matches an unknown name) while the CLI still claims the tools were
+    # relaxed — fail loud at load time instead.
+    spec = tmp_path / "typo.yaml"
+    spec.write_text("id: x\ndomain: y\ngrader: validator\nmode: agent\ntools: [Bahs]\n")
+    with pytest.raises(ValueError, match="unknown tool"):
+        load_task(spec)
 
 
 @pytest.mark.unit

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 
 from claude_ablation_lab.ledger import load_rows
-from claude_ablation_lab.showcase import STRIP_FIELDS, sanitize_row
+from claude_ablation_lab.showcase import KEEP_FIELDS, sanitize_row
 
 _PUBLISHED = Path(__file__).parent.parent / "results" / "showcase.jsonl"
 
@@ -53,12 +53,13 @@ _PUBLISHED_KEYS = frozenset(
 
 @pytest.mark.unit
 def test_published_file_is_sanitized_and_rescannable() -> None:
-    # Re-running the sanitizer over the published rows must be a no-op pass: no private
-    # keys present, no path fragments / oversized strings anywhere. The keyset is pinned
-    # EXACTLY — a future writer field cannot slip into the public artifact unreviewed.
+    # Re-running the sanitizer over the published rows must be a no-op pass: every key
+    # is on the current allow-list, no path fragments / oversized strings anywhere. The
+    # keyset is ALSO pinned EXACTLY (independent of showcase.py's own KEEP_FIELDS) — a
+    # future writer field cannot slip into the public artifact unreviewed even if
+    # KEEP_FIELDS itself grows (e.g. this file predates ``tool_calls``, added in D6).
     for row in _rows():
-        for private in STRIP_FIELDS:
-            assert private not in row
+        assert set(row) <= KEEP_FIELDS
         assert set(row) == _PUBLISHED_KEYS
         assert sanitize_row(dict(row)) == row
 

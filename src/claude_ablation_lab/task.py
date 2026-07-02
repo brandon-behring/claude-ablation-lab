@@ -21,6 +21,8 @@ from typing import Any, Literal
 
 import yaml
 
+from claude_ablation_lab.runner import KNOWN_BUILTIN_TOOLS
+
 __all__ = ["Task", "TaskMode", "REQUIRED_KEYS", "load_task", "load_all"]
 
 TaskMode = Literal["single", "agent"]
@@ -41,6 +43,14 @@ class Task:
     params: Mapping[str, Any] = field(default_factory=dict)
     timeout_s: float = 900.0
     tags: tuple[str, ...] = ()
+    #: Tools this task needs beyond the always-allowed ``Skill``/``StructuredOutput``
+    #: (e.g. an agentic task's ``[Bash, Read, Write]``). Empty for every non-agentic
+    #: task today — the hermetic default already covers them. Validated at load time
+    #: against ``KNOWN_BUILTIN_TOOLS``: an unrecognized name here would silently
+    #: relax nothing (`prepare.py`'s subtraction just never matches it) while the CLI
+    #: reports the tools as relaxed — a fail-open the loader closes instead. See
+    #: :mod:`prepare`.
+    tools: tuple[str, ...] = ()
 
 
 def load_task(path: Path | str) -> Task:
@@ -68,7 +78,33 @@ def load_task(path: Path | str) -> Task:
         params=params,
         timeout_s=float(raw.get("timeout_s", 900.0)),
         tags=tuple(str(tag) for tag in (raw.get("tags") or ())),
+        tools=_load_tools(path, raw.get("tools")),
     )
+
+
+def _load_tools(path: Path, raw_tools: object) -> tuple[str, ...]:
+    """Validate + parse a task's ``tools:`` list (fail loud, never a silent no-op).
+
+    Two footguns this closes: a bare YAML scalar (``tools: Bash`` parses as the
+    string ``"Bash"``, and iterating a string yields its *characters* — a real,
+    reproduced failure mode) must be a list; and an unrecognized tool name would
+    otherwise silently relax nothing (``prepare.py``'s subtraction never matches
+    it) while the CLI still reports the tools as relaxed.
+    """
+    if raw_tools is None:
+        return ()
+    if not isinstance(raw_tools, list):
+        raise ValueError(
+            f"task spec {path}: 'tools' must be a YAML list of tool names, got {raw_tools!r}"
+        )
+    tools = tuple(str(tool) for tool in raw_tools)
+    unknown = sorted(set(tools) - set(KNOWN_BUILTIN_TOOLS))
+    if unknown:
+        raise ValueError(
+            f"task spec {path}: unknown tool(s) in 'tools': {unknown} "
+            f"(known: {sorted(KNOWN_BUILTIN_TOOLS)})"
+        )
+    return tools
 
 
 def load_all(directory: Path | str) -> list[Task]:

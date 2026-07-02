@@ -79,9 +79,16 @@ matched (model, effort) config pairs) runs under the following rules, fixed in a
   `--no-session-persistence`, so gold-bearing session files stop accumulating on the
   host at the source; the published 2026-07-02 run predates that flag — its session
   files are exactly what the per-cell mechanism evidence was harvested from, and the
-  tool denials closed the access path. An *agentic* task (one that legitimately needs
-  Bash/file tools, like T2) must explicitly relax `ClaudeCodeRunner.disallowed_tools`
-  and accept the weaker boundary — the showcase tasks never do.
+  tool denials closed the access path. **Task-scoped relaxation (D6, 2026-07-02):** an
+  *agentic* task (one that legitimately needs Bash/file tools, like T2) declares exactly
+  what it needs via `tools:` in its task YAML; the preparer computes that task's
+  effective deny-list (the hermetic catalog minus the declared tools) and the runner
+  applies it per-cell — the showcase tasks declare none and keep the full hermetic
+  default. **In-band mechanism capture (D6):** `--no-session-persistence` made the
+  post-hoc session-file harvest above impossible for any future sweep, so a real sweep
+  now runs with `--output-format stream-json` by default and records each cell's actual
+  tool invocations directly on its ledger row (`tool_calls`) — mechanism evidence no
+  longer depends on transcripts surviving on the host.
 
 ## Audit trail
 
@@ -94,3 +101,5 @@ matched (model, effort) config pairs) runs under the following rules, fixed in a
 | 2026-07-01 | Comprehensive 3-lens ship-review | exact sign-flip verdicts; unparseable = honest 0; epoch-range labeling; leakage self-test reframing; anchor v2 floor — `docs/design/2026-07-01_comprehensive-review.md` |
 | 2026-07-02 | Checkpoint adversarial review (pre-sweep, 3 voices) | mechanism wording fixed; first-run primacy replaces the rescue amendment; fixture README neutralized; hermetic cell flags + out-of-repo worktrees; this pre-registration committed before the sweep — `docs/design/2026-07-02_checkpoint-review.md` |
 | 2026-07-02 | **Public showcase run** (54 cells, the pre-registered primary) | 54/54 `ok`, 0 unparseable, 18/18 configs at 3/3 epochs; t4 A/B: 6/6 pairs 0.0→1.0, Δ=+1.000, exact p=0.0312, `real=yes`; t3 saturated at 1.000; sanitized ledger (`results/showcase.jsonl`, sanitizer caught a live absolute-path leak in `infra_repo` on first use) + figures committed |
+| 2026-07-02 | D6 hardening (PR #11 review follow-ups) | task-scoped tool policy (agentic tasks declare `tools:`, no more hand-relaxing the runner); tool deny-list catalog live-verified against the installed CLI, catching a dead `"SlashCommand"` entry that gave zero actual protection; in-band mechanism capture via `stream-json` replaces the now-impossible session-file harvest; sanitizer inverted to an allow-list (`KEEP_FIELDS`) — `docs/design/2026-07-01_phase6-deferrals.md` §D6, `docs/design/2026-07-02_t2-runway.md` |
+| 2026-07-02 | D6 hardening — 3-voice adversarial review (codex + gemini + blind Claude subagent) | caught and fixed a live regression this PR would otherwise have shipped: `capture_mechanism`'s new default combined with T1's `--json-schema` would have silently broken every T1 cell (`--json-schema` is implemented as a synthetic `StructuredOutput` tool call, confirmed live, which the hermetic default was about to deny); also fixed `task.tools` YAML validation, `spec_sha` now covering tool-policy changes, `tools_used`/`tool_calls` `None`-vs-`{}` (not-measured vs. measured-zero) semantics, `estimate` sharing `run`'s version gate, and a CI-portability bug (the version gate broke on any machine without a `claude` binary matching the pin, including GitHub Actions — caught by literally stripping `claude` from `PATH` and re-running the suite). 5 findings refuted with evidence. Full tally — `docs/design/2026-07-02_d6-review.md` |

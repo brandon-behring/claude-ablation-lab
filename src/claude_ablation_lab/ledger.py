@@ -43,7 +43,7 @@ RunKey = tuple[str, str, str, str, int]
 LedgerKey = tuple[str, str, str, str, int, str]
 
 # Persisted as JSON strings (see module docstring); decoded on load.
-_JSON_FIELDS = ("subscores", "details")
+_JSON_FIELDS = ("subscores", "details", "tool_calls")
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +85,17 @@ class LedgerRow:
     infra_sha: str | None = None
     global_layer: str | None = None
     mcp_servers: tuple[str, ...] = ()
+    #: Mechanism evidence: tool name → invocation count, derived from the runner's
+    #: ``tools_used``. ``None`` means *not measured* (``ClaudeCodeRunner.
+    #: capture_mechanism=False``, the pre-D6 default and the shape of every row on
+    #: this machine before D6); ``{}`` means *measured, zero tool calls* — collapsing
+    #: the two would make "we didn't look" indistinguishable from "we looked and saw
+    #: nothing" (review finding). Persisted as a JSON string like
+    #: ``subscores``/``details`` (see module docstring) — its key set varies per row
+    #: (a T4 control cell: ``{}``; a with-skill cell: ``{"Skill": 1}``; a future T2
+    #: cell: ``{"Bash": 3, "Write": 1, "Skill": 1}``), the same DuckDB-heterogeneity
+    #: reason those two fields aren't native columns.
+    tool_calls: dict[str, int] | None = None
 
     @property
     def run_key(self) -> RunKey:
@@ -104,11 +115,19 @@ class LedgerRow:
 
 
 def _row_from_jsonl_dict(raw: dict[str, Any]) -> LedgerRow:
-    """Inverse of :meth:`LedgerRow.to_jsonl_dict` (tolerant of legacy/native dicts)."""
+    """Inverse of :meth:`LedgerRow.to_jsonl_dict` (tolerant of legacy/native dicts).
+
+    A key *present* but stored as a JSON string is decoded; a key *absent entirely*
+    (an old row written before that field existed) is left out of the constructor
+    call so ``LedgerRow`` applies that field's own dataclass default — ``{}`` for
+    ``subscores``/``details``, ``None`` for ``tool_calls``. A shared hardcoded
+    fallback here would be wrong for any field whose true default isn't ``{}``.
+    """
     data = dict(raw)
     for key in _JSON_FIELDS:
-        value = data.get(key)
-        data[key] = json.loads(value) if isinstance(value, str) else (value or {})
+        if key in data:
+            value = data[key]
+            data[key] = json.loads(value) if isinstance(value, str) else value
     data["mcp_servers"] = tuple(data.get("mcp_servers") or ())
     known = set(LedgerRow.__dataclass_fields__)
     return LedgerRow(**{k: v for k, v in data.items() if k in known})

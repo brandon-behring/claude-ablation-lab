@@ -22,6 +22,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from claude_ablation_lab.runner import HERMETIC_DISALLOWED_TOOLS
 from claude_ablation_lab.task import Task
 
 __all__ = [
@@ -42,11 +43,15 @@ DEFAULT_AGENT_PERMISSION_MODE = "acceptEdits"
 class Prepared:
     """A task made concrete for one run+grade cycle.
 
-    ``spec_sha`` fingerprints the *gradeable identity* (prompt + json_schema +
-    gold). It is stamped on every ledger row and gates resume/re-grade: if a
-    task's prompt, schema, seed/subsample, or gold changes, the fingerprint
-    changes, so a stored run is never silently reused for — nor graded against —
-    a different spec (the Phase-3 analog of the run/grade honesty split).
+    ``spec_sha`` fingerprints the *gradeable identity* (prompt + json_schema + gold
+    + declared tools). It is stamped on every ledger row and gates resume/re-grade:
+    if a task's prompt, schema, seed/subsample, gold, or tool policy changes, the
+    fingerprint changes, so a stored run is never silently reused for — nor graded
+    against — a different spec (the Phase-3 analog of the run/grade honesty split).
+    Tool policy joined this fingerprint in D6 (review finding): unlike
+    ``permission_mode`` (execution friction only), a task's tool set changes *what
+    the cell can even do* — reusing a run from before a ``tools:`` change would
+    silently compare results measured under different tool boundaries.
     """
 
     prompt: str
@@ -54,13 +59,23 @@ class Prepared:
     json_schema: dict[str, Any] | None = None
     artifact: str | None = None
     permission_mode: str | None = None
+    #: Per-cell ``--disallowedTools`` override. ``None`` → the runner's own default
+    #: (the hermetic tool-minimal set). Not itself hashed into ``spec_sha`` — it's a
+    #: pure function of ``Task.tools`` (+ the catalog), and ``Task.tools`` is what's
+    #: hashed instead, as the actual declared source of intent.
+    disallowed_tools: tuple[str, ...] | None = None
     spec_sha: str = ""
 
 
-def spec_sha(prompt: str, json_schema: dict[str, Any] | None, gold: Mapping[str, Any]) -> str:
-    """16-hex fingerprint of a cell's gradeable inputs (prompt + schema + gold)."""
+def spec_sha(
+    prompt: str,
+    json_schema: dict[str, Any] | None,
+    gold: Mapping[str, Any],
+    tools: tuple[str, ...] = (),
+) -> str:
+    """16-hex fingerprint of a cell's gradeable inputs (prompt + schema + gold + tools)."""
     blob = json.dumps(
-        {"prompt": prompt, "schema": json_schema, "gold": gold},
+        {"prompt": prompt, "schema": json_schema, "gold": gold, "tools": tools},
         sort_keys=True,
         default=str,
     )
@@ -94,12 +109,22 @@ def _prepare_classification(task: Task) -> Prepared:
 
 
 def _prepare_validator(task: Task) -> Prepared:
-    """T2: static ``/research-plan`` prompt; grade the captured ``research_plan.md``."""
+    """T2: static ``/research-plan`` prompt; grade the captured ``research_plan.md``.
+
+    Agentic tasks need real tools, so this is the one preparer that relaxes the
+    hermetic default: ``disallowed_tools`` = the base catalog *minus* whatever the
+    task declares via ``tools:`` (e.g. Bash/Read/Write/Edit for a file-writing skill).
+    A task declaring no ``tools`` gets the unmodified hermetic default back — agentic
+    but tool-minimal, which the CLI warns about (see ``cli/main.py``).
+    """
+    needed = set(task.tools)
+    effective = tuple(t for t in HERMETIC_DISALLOWED_TOOLS if t not in needed)
     return Prepared(
         prompt=task.prompt,
         gold=task.gold,
         artifact=str(task.params.get("artifact", DEFAULT_ARTIFACT)),
         permission_mode=str(task.params.get("permission_mode", DEFAULT_AGENT_PERMISSION_MODE)),
+        disallowed_tools=effective,
     )
 
 
@@ -125,4 +150,4 @@ def prepare_task(task: Task) -> Prepared:
             f"no preparer for grader {task.grader!r} (known: {', '.join(_PREPARERS)})"
         ) from None
     prep = preparer(task)
-    return replace(prep, spec_sha=spec_sha(prep.prompt, prep.json_schema, prep.gold))
+    return replace(prep, spec_sha=spec_sha(prep.prompt, prep.json_schema, prep.gold, task.tools))

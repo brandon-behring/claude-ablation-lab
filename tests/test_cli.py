@@ -147,7 +147,7 @@ def _estimate(status: str) -> object:
 @pytest.mark.unit
 def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
     from claude_ablation_lab import orchestrate
-    from claude_ablation_lab.runner import ClaudeCodeRunner
+    from claude_ablation_lab.runner import CATALOG_VERIFIED_CLAUDE_VERSION, ClaudeCodeRunner
 
     captured: dict[str, object] = {}
 
@@ -157,6 +157,12 @@ def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
         return _estimate("ok")
 
     monkeypatch.setattr(orchestrate, "estimate_sweep", _stub)
+    # CI has no `claude` binary at all (claude_version() -> None) — estimate now
+    # shares run's version gate (D6), so this must not depend on what's installed
+    # on the machine running the test.
+    monkeypatch.setattr(
+        "claude_ablation_lab.provenance.claude_version", lambda: CATALOG_VERIFIED_CLAUDE_VERSION
+    )
     # Belt-and-braces: if a refactor ever makes the call-time import miss the patch,
     # fail loudly instead of silently invoking the real `claude` binary from pytest.
     monkeypatch.setattr(
@@ -182,7 +188,144 @@ def test_estimate_renders_projection(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.unit
+def test_run_version_gate_blocks_on_mismatch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr("claude_ablation_lab.provenance.claude_version", lambda: "9.9.9")
+    result = cli.invoke(
+        app,
+        [
+            "run",
+            str(REPO / "tasks"),
+            str(REPO / "grids" / "smoke.yaml"),
+            "--task",
+            "t3_verbatim_anchor",
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "9.9.9" in result.stdout and "--allow-unverified-tools" in result.stdout
+
+
+@pytest.mark.unit
+def test_run_version_gate_bypassed_with_flag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from claude_ablation_lab import orchestrate
+    from claude_ablation_lab.runner import ClaudeCodeRunner
+
+    monkeypatch.setattr("claude_ablation_lab.provenance.claude_version", lambda: "9.9.9")
+    monkeypatch.setattr(
+        orchestrate,
+        "run_sweep",
+        lambda *a, **k: orchestrate.SweepSummary(total=0, ran=0, regraded=0, skipped=0, failed=0),
+    )
+    monkeypatch.setattr(
+        ClaudeCodeRunner,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("live claude call escaped")),
+    )
+    result = cli.invoke(
+        app,
+        [
+            "run",
+            str(REPO / "tasks"),
+            str(REPO / "grids" / "smoke.yaml"),
+            "--task",
+            "t3_verbatim_anchor",
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+            "--allow-unverified-tools",
+        ],
+    )
+    assert result.exit_code == 0
+
+
+@pytest.mark.unit
+def test_run_agent_task_with_declared_tools_prints_info_not_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from claude_ablation_lab import orchestrate
+    from claude_ablation_lab.runner import CATALOG_VERIFIED_CLAUDE_VERSION, ClaudeCodeRunner
+
+    monkeypatch.setattr(
+        "claude_ablation_lab.provenance.claude_version", lambda: CATALOG_VERIFIED_CLAUDE_VERSION
+    )
+    monkeypatch.setattr(
+        orchestrate,
+        "run_sweep",
+        lambda *a, **k: orchestrate.SweepSummary(total=0, ran=0, regraded=0, skipped=0, failed=0),
+    )
+    monkeypatch.setattr(
+        ClaudeCodeRunner,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("live claude call escaped")),
+    )
+    # t2_research_plan.yaml declares tools: [Read, Write, Bash] (D6).
+    result = cli.invoke(
+        app,
+        [
+            "run",
+            str(REPO / "tasks" / "t2_research_plan.yaml"),
+            str(REPO / "grids" / "v1.yaml"),
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "tools relaxed" in result.stdout
+    assert "Bash" in result.stdout
+    assert "score ~0" not in result.stdout  # the no-tools warning must NOT fire
+
+
+@pytest.mark.unit
+def test_run_agent_task_without_declared_tools_warns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from claude_ablation_lab import orchestrate
+    from claude_ablation_lab.runner import CATALOG_VERIFIED_CLAUDE_VERSION, ClaudeCodeRunner
+
+    monkeypatch.setattr(
+        "claude_ablation_lab.provenance.claude_version", lambda: CATALOG_VERIFIED_CLAUDE_VERSION
+    )
+    monkeypatch.setattr(
+        orchestrate,
+        "run_sweep",
+        lambda *a, **k: orchestrate.SweepSummary(total=0, ran=0, regraded=0, skipped=0, failed=0),
+    )
+    monkeypatch.setattr(
+        ClaudeCodeRunner,
+        "run",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("live claude call escaped")),
+    )
+    task_yaml = tmp_path / "t2_no_tools.yaml"
+    task_yaml.write_text(
+        "id: t2_research_plan\ndomain: r\ngrader: validator\nmode: agent\n"
+        "infra_repo: ~/Claude/research_toolkit\nprompt: '/research-plan x'\n",
+        encoding="utf-8",
+    )
+    result = cli.invoke(
+        app,
+        [
+            "run",
+            str(task_yaml),
+            str(REPO / "grids" / "v1.yaml"),
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "score ~0" in result.stdout
+
+
+@pytest.mark.unit
 def test_estimate_bad_calibration_exits_2(monkeypatch: pytest.MonkeyPatch) -> None:
+    from claude_ablation_lab.runner import CATALOG_VERIFIED_CLAUDE_VERSION
+
+    monkeypatch.setattr(
+        "claude_ablation_lab.provenance.claude_version", lambda: CATALOG_VERIFIED_CLAUDE_VERSION
+    )
     monkeypatch.setattr(
         "claude_ablation_lab.orchestrate.estimate_sweep",
         lambda *a, **k: _estimate("halted"),

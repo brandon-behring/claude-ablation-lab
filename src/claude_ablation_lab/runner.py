@@ -29,7 +29,10 @@ __all__ = [
     "classify_status",
     "result_from_payload",
     "extract_json",
+    "parse_stream_json",
     "AUTH_ENV_STRIP",
+    "KNOWN_BUILTIN_TOOLS",
+    "CATALOG_VERIFIED_CLAUDE_VERSION",
     "HERMETIC_DISALLOWED_TOOLS",
 ]
 
@@ -38,26 +41,130 @@ RunStatus = Literal["ok", "rate_limited", "infra_error", "timeout", "parse_fail"
 # Env vars removed from the subprocess so `claude` uses the subscription login.
 AUTH_ENV_STRIP: tuple[str, ...] = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 
-#: Tools disallowed in every cell by default: the exec / filesystem-read / network /
-#: delegation escape surface. A live probe (2026-07-02 extended pilot) showed headless
-#: cells CAN run Bash — a control-arm cell grepped beyond its worktree and located
-#: files containing its own gold (prior sessions' transcripts; the public repo is one
-#: `curl` away). Disallowing WebSearch/WebFetch alone is not a boundary. The current
-#: task suite needs at most the Skill tool (t1 is JSON-only, t3's source is embedded
-#: in the prompt, t4's reference arrives via Skill), so cells run tool-minimal;
-#: a future agentic task must explicitly relax this via ``disallowed_tools``.
-HERMETIC_DISALLOWED_TOOLS: tuple[str, ...] = (
+#: The CLI's built-in tool names, as of the version below — there is no ``claude
+#: --list-tools`` (confirmed: ``--help`` documents only name-accepting flags). Sourced
+#: two ways, both dated 2026-07-02 against v2.1.198:
+#:
+#: 1. **Live-confirmed** (42 names): passing a name to ``--disallowedTools`` that the
+#:    CLI doesn't recognize prints ``Permission deny rule "<X>" matches no known
+#:    tool`` to stderr but still runs (exit 0) — so a real probe with ~40 candidates
+#:    cleanly separates real names from typos/renames at zero risk (the invocation
+#:    itself is never broken by an unrecognized name). ``DesignSync`` (1 name) came
+#:    from a live ``--output-format stream-json`` session's ``system/init`` event,
+#:    which reports a ``tools`` array — a second, independent live source (see the
+#:    D6.2 backlog note in ``docs/design/2026-07-01_phase6-deferrals.md`` for why
+#:    that array isn't used as the primary catalog: it disagrees with the probe on a
+#:    few names, e.g. it omits ``Grep``/``Glob``).
+#: 2. **Docs-only, not individually live-tested** (2 names): ``Agent``,
+#:    ``AskUserQuestion`` — confirmed real by Anthropic's tools-reference docs.
+#:
+#: **Important nuance, found via ``StructuredOutput`` (see below): "matches no known
+#: tool" is a validator/linting message, not proof a deny rule is inert.** A follow-up
+#: probe denied ``StructuredOutput`` specifically — same "unknown tool" warning as a
+#: deliberately-fake control name — yet the model's structured-output tool call was
+#: then actually rejected at runtime ("permission was denied"). So an unrecognized
+#: name can still functionally match at call time; "unknown to the validator" only
+#: means it's safe to *include* (never breaks the invocation itself), not that
+#: denying it has no effect. Two consequences:
+#:
+#: - ``StructuredOutput`` is real and load-bearing: ``--json-schema`` (T1's batched
+#:   verdict schema) is implemented as a synthetic ``StructuredOutput`` tool call
+#:   (confirmed live: the transcript shows ``tool_use`` with ``name: "StructuredOutput"``).
+#:   Denying it silently breaks every ``json_schema`` cell. It is excluded from
+#:   ``HERMETIC_DISALLOWED_TOOLS`` below, the same treatment as ``Skill`` — a
+#:   response-shaping mechanism the harness itself requested, not an escape-surface
+#:   tool a cell could use to read/write/exfiltrate.
+#: - ``"SlashCommand"``, previously in this tuple, is a confirmed-fake name — but *not*
+#:   solely on the "unknown tool" evidence above (which, per this nuance, wouldn't be
+#:   dispositive on its own). The real evidence: the published showcase's 54-session
+#:   harvest (`docs/design/2026-07-02_pr11-review.md`) shows all 18 with-skill cells
+#:   invoked ``Skill`` successfully *while `"SlashCommand"` sat in this exact deny
+#:   list* — so whatever it does or doesn't match, it demonstrably never blocked the
+#:   one thing it might have been guarding. It is dead weight, removed. It is *not*
+#:   replaced 1:1: ``--help`` confirms ``--disable-slash-commands`` — the only flag
+#:   governing that surface — also disables **all Skills** ("Skills still resolve via
+#:   /skill-name" per ``--bare``'s own description; a live ``system/init`` event lists
+#:   ``research-plan`` in both ``skills`` and ``slash_commands``, confirming they share
+#:   one resolution path in this CLI version). Using it here would silently zero out
+#:   the with-skill treatment arm. There is currently **no way to block user-level
+#:   ``~/.claude/commands`` injection without also disabling Skill** — recorded as a
+#:   residual gap, not silently dropped (D6.1 in the deferrals doc).
+KNOWN_BUILTIN_TOOLS: tuple[str, ...] = (
+    "Agent",
+    "Artifact",
+    "AskUserQuestion",
     "Bash",
-    "Read",
-    "Grep",
-    "Glob",
-    "Task",
-    "WebSearch",
-    "WebFetch",
-    "Write",
+    "BashOutput",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
     "Edit",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "Glob",
+    "Grep",
+    "KillShell",
+    "ListMcpResourcesTool",
+    "LSP",
+    "Monitor",
     "NotebookEdit",
-    "SlashCommand",  # user-level ~/.claude/commands must not inject into a cell
+    "PowerShell",
+    "PushNotification",
+    "Read",
+    "ReadMcpResourceTool",
+    "RemoteTrigger",
+    "ReportFindings",
+    "ScheduleWakeup",
+    "SendMessage",
+    "SendUserFile",
+    "ShareOnboardingGuide",
+    "Skill",  # the one tool a hermetic cell keeps — never in HERMETIC_DISALLOWED_TOOLS
+    "StructuredOutput",
+    "Task",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
+    "TodoWrite",
+    "ToolSearch",
+    "WaitForMcpServers",
+    "WebFetch",
+    "WebSearch",
+    "Workflow",
+    "Write",
+)
+
+#: The exact ``claude --version`` this catalog was verified against. ``cli/main.py``
+#: hard-stops a real sweep if the installed CLI has moved past this pin (a version
+#: bump may have added/renamed a tool the catalog doesn't know about — fail closed,
+#: don't silently trust a stale list) unless ``--allow-unverified-tools`` is passed.
+CATALOG_VERIFIED_CLAUDE_VERSION = "2.1.198"
+
+#: Tools kept out of every cell's deny list — not the escape surface, but mechanisms
+#: the harness itself relies on. ``Skill`` is the treatment mechanism under test.
+#: ``StructuredOutput`` is how ``--json-schema`` is actually implemented (a synthetic
+#: tool call, confirmed live — see the catalog docstring above); denying it silently
+#: breaks every schema-based cell (T1). Neither can read/write/exec/network on its
+#: own, so excluding them doesn't reopen the escape surface the rest of the deny
+#: list closes.
+_ALWAYS_ALLOWED: frozenset[str] = frozenset({"Skill", "StructuredOutput"})
+
+#: Tools disallowed in every cell by default: the exec / filesystem-read / network /
+#: delegation escape surface — every known built-in tool except `_ALWAYS_ALLOWED`. A
+#: live probe (2026-07-02 extended pilot) showed headless cells CAN run Bash — a
+#: control-arm cell grepped beyond its worktree and located files containing its own
+#: gold (prior sessions' transcripts; the public repo is one `curl` away). The
+#: current task suite needs at most the Skill tool (t1 is JSON-only via
+#: StructuredOutput, t3's source is embedded in the prompt, t4's reference arrives
+#: via Skill), so cells run tool-minimal by default; an agentic task relaxes this
+#: per-task via ``Task.tools``/``Prepared.disallowed_tools`` (see ``prepare.py``).
+HERMETIC_DISALLOWED_TOOLS: tuple[str, ...] = tuple(
+    t for t in KNOWN_BUILTIN_TOOLS if t not in _ALWAYS_ALLOWED
 )
 
 
@@ -77,6 +184,17 @@ class RunResult:
     usage: dict[str, Any]
     transcript_path: str | None
     raw: dict[str, Any] | None
+    #: Ordered tool names from ``tool_use`` content blocks — mechanism evidence.
+    #: ``None`` means *not measured* (plain ``json`` format has no per-tool events —
+    #: ``ClaudeCodeRunner.capture_mechanism=False``, or the run failed before any
+    #: events parsed); ``()`` means *measured, zero tool calls*. Collapsing these
+    #: (review finding, D6) would make "we didn't look" indistinguishable from "we
+    #: looked and saw nothing" — exactly the kind of overclaim this project has been
+    #: burned by before (PR #11's "control cells make zero tool calls" needed the
+    #: full session harvest to state precisely). Supersedes the now-impossible
+    #: post-hoc ``~/.claude/projects`` harvest, since cells run
+    #: ``--no-session-persistence``.
+    tools_used: tuple[str, ...] | None = None
 
 
 @runtime_checkable
@@ -85,7 +203,10 @@ class Runner(Protocol):
 
     ``json_schema`` requests structured output (T1's batched verdict array);
     ``permission_mode`` overrides the runner default per call (agentic T2 needs a
-    non-interactive mode so the skill's file writes don't block).
+    non-interactive mode so the skill's file writes don't block); ``disallowed_tools``
+    overrides the runner's default deny-list per call (agentic T2 needs real tools —
+    see ``prepare.py``'s ``Prepared.disallowed_tools``). ``None`` for either means
+    "use the runner's own default", not "allow everything".
     """
 
     def run(
@@ -97,6 +218,7 @@ class Runner(Protocol):
         cwd: Path,
         json_schema: dict[str, Any] | None = None,
         permission_mode: str | None = None,
+        disallowed_tools: tuple[str, ...] | None = None,
     ) -> RunResult: ...
 
 
@@ -120,6 +242,47 @@ def extract_json(text: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def parse_stream_json(text: str) -> tuple[dict[str, Any] | None, tuple[str, ...]]:
+    """Parse ``--output-format stream-json --verbose`` NDJSON output.
+
+    Returns ``(result_payload, tools_used)``. The terminal ``type: "result"`` event
+    is structurally identical to the single-shot ``json`` payload (same fields
+    :func:`result_from_payload` already reads: ``is_error``/``result``/
+    ``total_cost_usd``/``usage``/``session_id``/``num_turns``/``modelUsage``) —
+    verified against a live capture, 2026-07-02. ``tools_used`` is every
+    ``tool_use`` content-block ``name`` from ``type: "assistant"`` events, in
+    invocation order (an assistant turn may mix ``thinking``/``text``/``tool_use``
+    blocks — only the latter are collected). Tolerant of stray non-JSON or
+    non-dict lines, same defensive posture as :func:`extract_json`; a stream that
+    never reaches its terminal event (e.g. cut off mid-run) returns
+    ``(None, tools_used-so-far)`` rather than raising.
+    """
+    payload: dict[str, Any] | None = None
+    tools_used: list[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "result":
+            payload = event
+        elif event.get("type") == "assistant":
+            message = event.get("message")
+            content = message.get("content") if isinstance(message, dict) else None
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        name = block.get("name")
+                        if isinstance(name, str):
+                            tools_used.append(name)
+    return payload, tuple(tools_used)
 
 
 def classify_status(payload: dict[str, Any]) -> RunStatus:
@@ -152,6 +315,7 @@ def result_from_payload(
     latency_s: float,
     transcript_path: str | None,
     returncode: int | None = None,
+    tools_used: tuple[str, ...] | None = None,
 ) -> RunResult:
     """Build a RunResult from a parsed JSON payload (pure; unit-tested on fixtures).
 
@@ -175,6 +339,7 @@ def result_from_payload(
         usage=usage if isinstance(usage, dict) else {},
         transcript_path=transcript_path,
         raw=payload,
+        tools_used=tools_used,
     )
 
 
@@ -188,6 +353,10 @@ class ClaudeCodeRunner:
         timeout_s: hard wall-clock cap per cell (→ status `timeout`).
         max_budget_usd: soft per-call runaway-loop stop passed to `--max-budget-usd`.
         permission_mode: `--permission-mode` for agentic tasks so tools don't block.
+        capture_mechanism: use `--output-format stream-json --verbose` and populate
+            `RunResult.tools_used` instead of the default single-shot `json` format.
+            A sweep-level choice (not per-call, unlike `disallowed_tools`): either the
+            whole sweep wants mechanism evidence or it doesn't.
     """
 
     transcript_dir: Path | None = None
@@ -195,6 +364,7 @@ class ClaudeCodeRunner:
     max_budget_usd: float | None = None
     permission_mode: str | None = None
     disallowed_tools: tuple[str, ...] = HERMETIC_DISALLOWED_TOOLS
+    capture_mechanism: bool = False
 
     def _argv(
         self,
@@ -204,6 +374,7 @@ class ClaudeCodeRunner:
         *,
         json_schema: dict[str, Any] | None = None,
         permission_mode: str | None = None,
+        disallowed_tools: tuple[str, ...] | None = None,
     ) -> list[str]:
         argv = [
             "claude",
@@ -214,7 +385,7 @@ class ClaudeCodeRunner:
             "--effort",
             effort,
             "--output-format",
-            "json",
+            "stream-json" if self.capture_mechanism else "json",
             # Hermetic cells (2026-07-02 checkpoint review + extended-pilot probe): no
             # user MCP servers, and the escape-surface tools are disallowed so a cell
             # can only see its prompt, its cwd-loaded memory/skills, and the Skill tool.
@@ -226,8 +397,11 @@ class ClaudeCodeRunner:
             "--strict-mcp-config",
             "--no-session-persistence",
         ]
-        if self.disallowed_tools:
-            argv += ["--disallowedTools", *self.disallowed_tools]
+        if self.capture_mechanism:
+            argv.append("--verbose")  # required for stream-json to emit tool_use blocks
+        tools = disallowed_tools if disallowed_tools is not None else self.disallowed_tools
+        if tools:
+            argv += ["--disallowedTools", *tools]
         if json_schema is not None:
             argv += ["--json-schema", json.dumps(json_schema)]
         if self.max_budget_usd is not None:
@@ -283,10 +457,16 @@ class ClaudeCodeRunner:
         cwd: Path,
         json_schema: dict[str, Any] | None = None,
         permission_mode: str | None = None,
+        disallowed_tools: tuple[str, ...] | None = None,
     ) -> RunResult:
         run_id = uuid.uuid4().hex
         argv = self._argv(
-            prompt, model, effort, json_schema=json_schema, permission_mode=permission_mode
+            prompt,
+            model,
+            effort,
+            json_schema=json_schema,
+            permission_mode=permission_mode,
+            disallowed_tools=disallowed_tools,
         )
         base_envelope: dict[str, Any] = {"argv": argv, "cwd": str(cwd)}
         start = time.monotonic()
@@ -325,7 +505,10 @@ class ClaudeCodeRunner:
             return self._failure(run_id, "infra_error", str(e), latency_s, tp)
 
         latency_s = time.monotonic() - start
-        payload = extract_json(proc.stdout)
+        if self.capture_mechanism:
+            payload, tools_used = parse_stream_json(proc.stdout)
+        else:
+            payload, tools_used = extract_json(proc.stdout), None  # not measured, not "zero"
         tp = self._write_transcript(
             run_id,
             {
@@ -345,4 +528,5 @@ class ClaudeCodeRunner:
             latency_s=latency_s,
             transcript_path=tp,
             returncode=proc.returncode,
+            tools_used=tools_used,
         )

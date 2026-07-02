@@ -10,6 +10,7 @@ from claude_ablation_lab.prepare import (
     DEFAULT_ARTIFACT,
     prepare_task,
 )
+from claude_ablation_lab.runner import HERMETIC_DISALLOWED_TOOLS
 from claude_ablation_lab.task import Task
 
 
@@ -87,6 +88,49 @@ def test_env_holdout_path_beats_task_pinned_parquet(tmp_path, monkeypatch) -> No
 
 
 @pytest.mark.unit
+def test_prepare_validator_relaxes_declared_tools_from_hermetic_default() -> None:
+    task = Task(
+        id="t2",
+        domain="r",
+        grader="validator",
+        mode="agent",
+        prompt="/research-plan x",
+        tools=("Read", "Write", "Bash"),
+    )
+    prep = prepare_task(task)
+    assert prep.disallowed_tools is not None
+    assert set(prep.disallowed_tools) == set(HERMETIC_DISALLOWED_TOOLS) - {"Read", "Write", "Bash"}
+    for allowed in ("Read", "Write", "Bash"):
+        assert allowed not in prep.disallowed_tools
+    assert "Skill" not in prep.disallowed_tools  # already excluded from the base catalog
+    # Tool policy DOES change the cell's gradeable identity (D6 review finding):
+    # unlike permission_mode, it changes what the cell can even do, so a resume
+    # against an old ledger row from before a tools: change must not silently
+    # reuse output measured under a different tool boundary.
+    no_tools = prepare_task(
+        Task(id="t2", domain="r", grader="validator", mode="agent", prompt="/research-plan x")
+    )
+    assert prep.spec_sha != no_tools.spec_sha
+
+
+@pytest.mark.unit
+def test_prepare_validator_with_no_declared_tools_keeps_full_hermetic_default() -> None:
+    task = Task(id="t2", domain="r", grader="validator", mode="agent", prompt="/research-plan x")
+    prep = prepare_task(task)
+    assert prep.disallowed_tools == HERMETIC_DISALLOWED_TOOLS
+
+
+@pytest.mark.unit
+def test_prepare_anchor_and_classification_leave_disallowed_tools_unset() -> None:
+    # Only the agentic (validator) preparer relaxes the hermetic default — a
+    # single-turn task has no business touching the tool boundary.
+    anchor = prepare_task(
+        Task(id="t3", domain="e", grader="anchor", mode="single", prompt="x", gold={})
+    )
+    assert anchor.disallowed_tools is None
+
+
+@pytest.mark.unit
 def test_prepare_unknown_grader_raises() -> None:
     task = Task(id="x", domain="d", grader="mystery", mode="single")
     with pytest.raises(ValueError, match="no preparer"):
@@ -110,3 +154,21 @@ def test_spec_sha_is_stable_and_changes_with_gold() -> None:
     different = prepare_task(anchor("xyz")).spec_sha
     assert same_a and same_a == same_b  # deterministic for identical spec
     assert same_a != different  # a gold change changes the fingerprint
+
+
+@pytest.mark.unit
+def test_spec_sha_changes_with_declared_tools() -> None:
+    def validator(tools: tuple[str, ...]) -> Task:
+        return Task(
+            id="t2",
+            domain="r",
+            grader="validator",
+            mode="agent",
+            prompt="/research-plan x",
+            tools=tools,
+        )
+
+    none = prepare_task(validator(())).spec_sha
+    some = prepare_task(validator(("Read",))).spec_sha
+    more = prepare_task(validator(("Read", "Write"))).spec_sha
+    assert len({none, some, more}) == 3  # each distinct tool set is a distinct spec
