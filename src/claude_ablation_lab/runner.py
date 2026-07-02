@@ -191,6 +191,14 @@ class ClaudeCodeRunner:
             effort,
             "--output-format",
             "json",
+            # Hermetic cells (2026-07-02 checkpoint review): drop the user's MCP servers
+            # and web tools so a cell can only act on its worktree. The A/B control arm
+            # must have no path to fetch the (publicly hosted) gold text; headless
+            # default-deny alone is a policy, not a construction. Skill/file tools remain.
+            "--strict-mcp-config",
+            "--disallowedTools",
+            "WebSearch",
+            "WebFetch",
         ]
         if json_schema is not None:
             argv += ["--json-schema", json.dumps(json_schema)]

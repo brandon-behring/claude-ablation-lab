@@ -66,6 +66,13 @@ def run(
         float | None, typer.Option(help="Soft per-call --max-budget-usd runaway stop")
     ] = None,
     timeout_s: Annotated[float, typer.Option(help="Per-cell wall-clock cap")] = 900.0,
+    worktree_base: Annotated[
+        Path,
+        typer.Option(
+            help="Directory variant worktrees materialize under; point it OUTSIDE the "
+            "harness repo so cells cannot see the harness's own CLAUDE.md as ancestor memory"
+        ),
+    ] = Path(".worktrees"),
 ) -> None:
     """Execute the sweep sequentially, appending each cell to the ledger (resumable)."""
     tasks = _load_suite(suite, task)
@@ -96,7 +103,9 @@ def run(
         max_budget_usd=max_budget_usd,
     )
     console.print(f"running {len(cells)} cells → {ledger}")
-    summary = run_sweep(tasks, parsed_grid, runner=runner, ledger_path=ledger)
+    summary = run_sweep(
+        tasks, parsed_grid, runner=runner, ledger_path=ledger, worktree_base=worktree_base
+    )
     _print_summary(summary)
     if summary.failed:
         console.print(

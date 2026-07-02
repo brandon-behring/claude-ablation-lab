@@ -77,6 +77,11 @@ def test_argv_includes_core_flags_and_optionals() -> None:
     for flag in ("--model", "--effort", "--output-format", "--max-budget-usd", "--permission-mode"):
         assert flag in argv
     assert argv[argv.index("--output-format") + 1] == "json"
+    # Hermeticity flags ride on EVERY cell: no user MCP servers, no web tools (the A/B
+    # control arm must have no path to its publicly hosted gold — checkpoint review).
+    assert "--strict-mcp-config" in argv
+    i = argv.index("--disallowedTools")
+    assert argv[i + 1 : i + 3] == ["WebSearch", "WebFetch"]
 
 
 @pytest.mark.unit

@@ -37,6 +37,38 @@ How the harness produces trustworthy numbers. Expanded as phases land.
 - Graders are tested against known input+gold before any number is trusted, and carry
   anti-gaming floors (anchor v2: ≥3-word **distinct** quotes only).
 
+## Showcase pre-registration (2026-07-02, committed before any sweep cell ran)
+
+The public showcase (`grids/showcase.yaml`: 54 cells; headline = the t4 skill A/B over 6
+matched (model, effort) config pairs) runs under the following rules, fixed in advance:
+
+- **What the A/B measures:** *prompt-directed skill consultation.* The T4 prompt names the
+  `project-reference` skill and asks Claude to consult it; the same prompt runs in both arms
+  and only the infra differs (the `with-skill` ref ships the skill, `without-skill` doesn't).
+  This is a designed positive control for the harness's detection machinery — it is **not**
+  a test of autonomous skill discovery, and is never described as one.
+- **First-run primacy:** the first full run of the pre-registered spec is the published
+  primary outcome, whatever its verdict. If any of the 6 pairs has a zero diff
+  (`n_nonzero < 6` → `real=no` is mechanically forced), that verdict is published and the
+  failing configs are characterized from their transcripts. Any re-run under an amended
+  spec is a clearly labeled follow-up, reported alongside — never replacing — the primary,
+  and is written to a **fresh ledger file** (aggregation dedupes grade rows per `run_id`,
+  not per spec; mixing specs in one ledger would silently average them).
+- **Completeness gate:** the headline verdict is only quoted if all 6 configs have 3/3
+  epochs `ok` in **both** arms; otherwise the incompleteness is reported first.
+- **Retry policy:** two mechanisms, both bounded. In-cell: transient `rate_limited` backs
+  off and retries (hard usage caps halt the sweep, resumably). Across the sweep: at most
+  **2 resume passes** (`ablation run` re-invocations; settled cells skip) for
+  `rate_limited`/`timeout`/`infra_error` cells, then whatever remains is published as-is
+  with its failure rate.
+- **Hermetic cells:** every cell runs with `--strict-mcp-config` (no user MCP servers) and
+  `--disallowedTools WebSearch WebFetch` — the control arm must have no path to the gold
+  text (which is public in this repo), and that is enforced by construction, not by
+  default-deny policy. The showcase sweep also materializes worktrees **outside** the
+  harness repo (`--worktree-base`) so the harness's own `CLAUDE.md` is not ancestor memory
+  for any cell. The in-repo fixture README is neutral: the subject model is never told the
+  experiment design, its arm, or the expected outcome.
+
 ## Audit trail
 
 | Date | Check | Result |
@@ -46,3 +78,4 @@ How the harness produces trustworthy numbers. Expanded as phases land.
 | 2026-06-26 | Phases 3–5 + methodology audit | spec_sha resume honesty; stale-grade dedupe fix; live 4-cell smoke 4/4 → report → resume |
 | 2026-07-01 | Phases A/B/D (PRs #5–#8) | install + CI honesty; coverage floor 90 + gitleaks; plotting; demo-infra A/B; the flat-skill probe |
 | 2026-07-01 | Comprehensive 3-lens ship-review | exact sign-flip verdicts; unparseable = honest 0; epoch-range labeling; leakage self-test reframing; anchor v2 floor — `docs/design/2026-07-01_comprehensive-review.md` |
+| 2026-07-02 | Checkpoint adversarial review (pre-sweep, 3 voices) | mechanism wording fixed; first-run primacy replaces the rescue amendment; fixture README neutralized; hermetic cell flags + out-of-repo worktrees; this pre-registration committed before the sweep — `docs/design/2026-07-02_checkpoint-review.md` |
