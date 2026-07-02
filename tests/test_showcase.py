@@ -9,9 +9,9 @@ from pathlib import Path
 import pytest
 
 from claude_ablation_lab.showcase import (
+    KEEP_FIELDS,
     MAX_STRING_LEN,
     SHOWCASE_TASKS,
-    STRIP_FIELDS,
     sanitize_ledger,
     sanitize_row,
 )
@@ -43,6 +43,7 @@ def _raw_row(**overrides: object) -> dict[str, object]:
         "run_id": "d" * 32,
         "ts": "2026-07-02T09:00:00+00:00",
         "subscores": {},
+        "tool_calls": {"Skill": 1},
         # The private fields the sanitizer exists to remove:
         "details": {"quotes": ["the whole reference text..."]},
         "output_preview": "```json\\n{...}",
@@ -57,10 +58,13 @@ def _raw_row(**overrides: object) -> dict[str, object]:
 
 
 @pytest.mark.unit
-def test_sanitize_row_strips_exactly_the_private_fields() -> None:
-    kept = sanitize_row(_raw_row())
-    for field in STRIP_FIELDS:
-        assert field not in kept
+def test_sanitize_row_keeps_only_keep_fields() -> None:
+    raw = _raw_row()
+    kept = sanitize_row(raw)
+    # Allow-list semantics (D6 inversion): nothing survives beyond KEEP_FIELDS, full
+    # stop — not "everything except the fields we remembered to name as private".
+    assert set(kept) <= KEEP_FIELDS
+    assert set(kept) == set(raw) & KEEP_FIELDS
     # The analysis-critical surface survives — report/compare must work off the
     # published file exactly as off the raw one.
     for field in (
@@ -78,8 +82,22 @@ def test_sanitize_row_strips_exactly_the_private_fields() -> None:
         "cost_usd",
         "latency_s",
         "ts",
+        "tool_calls",
     ):
         assert field in kept
+    # The formerly hand-maintained STRIP_FIELDS are gone because they're simply not
+    # on the allow-list — no special-case logic keeps them out.
+    for field in (
+        "details",
+        "output_preview",
+        "output_path",
+        "transcript_path",
+        "session_id",
+        "mcp_servers",
+        "global_layer",
+        "infra_repo",
+    ):
+        assert field not in kept
 
 
 @pytest.mark.unit

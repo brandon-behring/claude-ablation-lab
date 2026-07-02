@@ -10,6 +10,7 @@ from claude_ablation_lab.prepare import (
     DEFAULT_ARTIFACT,
     prepare_task,
 )
+from claude_ablation_lab.runner import HERMETIC_DISALLOWED_TOOLS
 from claude_ablation_lab.task import Task
 
 
@@ -84,6 +85,46 @@ def test_env_holdout_path_beats_task_pinned_parquet(tmp_path, monkeypatch) -> No
     )
     prep = prepare_task(task)  # would raise FileNotFoundError if the pinned path won
     assert len(prep.gold["labels"]) == 4
+
+
+@pytest.mark.unit
+def test_prepare_validator_relaxes_declared_tools_from_hermetic_default() -> None:
+    task = Task(
+        id="t2",
+        domain="r",
+        grader="validator",
+        mode="agent",
+        prompt="/research-plan x",
+        tools=("Read", "Write", "Bash"),
+    )
+    prep = prepare_task(task)
+    assert prep.disallowed_tools is not None
+    assert set(prep.disallowed_tools) == set(HERMETIC_DISALLOWED_TOOLS) - {"Read", "Write", "Bash"}
+    for allowed in ("Read", "Write", "Bash"):
+        assert allowed not in prep.disallowed_tools
+    assert "Skill" not in prep.disallowed_tools  # already excluded from the base catalog
+    # Not part of the cell's gradeable identity — same spec_sha regardless of tools.
+    same_tools = prepare_task(
+        Task(id="t2", domain="r", grader="validator", mode="agent", prompt="/research-plan x")
+    )
+    assert prep.spec_sha == same_tools.spec_sha
+
+
+@pytest.mark.unit
+def test_prepare_validator_with_no_declared_tools_keeps_full_hermetic_default() -> None:
+    task = Task(id="t2", domain="r", grader="validator", mode="agent", prompt="/research-plan x")
+    prep = prepare_task(task)
+    assert prep.disallowed_tools == HERMETIC_DISALLOWED_TOOLS
+
+
+@pytest.mark.unit
+def test_prepare_anchor_and_classification_leave_disallowed_tools_unset() -> None:
+    # Only the agentic (validator) preparer relaxes the hermetic default — a
+    # single-turn task has no business touching the tool boundary.
+    anchor = prepare_task(
+        Task(id="t3", domain="e", grader="anchor", mode="single", prompt="x", gold={})
+    )
+    assert anchor.disallowed_tools is None
 
 
 @pytest.mark.unit
