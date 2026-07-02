@@ -31,3 +31,19 @@ Authoring, not code. The harness's methodology (the leakage gate, infra-sensitiv
 run/grade decoupling, cheapest-per-successful-outcome) and the Phase-C figures could become
 chapter material, but that is out of scope for this repository. Needs scoping — a chapter draft?
 a reproducible appendix? just the figures? — before any work.
+
+## D6 — hermeticity follow-ups (from the PR #11 review round, 2026-07-02)
+
+- **Task-scoped tool policy:** `disallowed_tools` is a runner-level default today; agentic
+  tasks (T2) need it relaxed per task/grid, plumbed through `TaskSpec`/`Prepared` into
+  `Runner.run`. Until then T2 requires hand-constructing the runner.
+- **Deny-list catalog check:** the hermetic boundary is a hand-maintained deny-list — it
+  fails open if Claude Code adds/renames a tool. A pre-sweep probe that enumerates the
+  installed CLI's tool set and fails closed on unknown non-Skill tools would harden it.
+- **Mechanism capture without session files:** cells now run `--no-session-persistence`,
+  so future per-cell tool-use evidence must come from `--output-format stream-json` (or an
+  equivalent runner-side capture) instead of `~/.claude/projects` transcripts.
+- **Sanitizer keep-list inversion:** `STRIP_FIELDS` is a deny-list — a future ledger
+  field publishes by default if short and path-free. The published-artifact test now pins
+  the exact keyset for the committed file; inverting the sanitizer itself to an explicit
+  keep-list would extend that guarantee to any future artifact.

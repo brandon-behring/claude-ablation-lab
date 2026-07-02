@@ -66,6 +66,14 @@ def run(
         float | None, typer.Option(help="Soft per-call --max-budget-usd runaway stop")
     ] = None,
     timeout_s: Annotated[float, typer.Option(help="Per-cell wall-clock cap")] = 900.0,
+    worktree_base: Annotated[
+        Path | None,
+        typer.Option(
+            help="Directory variant worktrees materialize under (default: "
+            "~/.cache/claude-ablation-lab/worktrees — deliberately OUTSIDE any repo, so "
+            "cells cannot see the harness's own CLAUDE.md as ancestor memory)"
+        ),
+    ] = None,
 ) -> None:
     """Execute the sweep sequentially, appending each cell to the ledger (resumable)."""
     tasks = _load_suite(suite, task)
@@ -95,8 +103,27 @@ def run(
         timeout_s=timeout_s,
         max_budget_usd=max_budget_usd,
     )
+    from claude_ablation_lab.worktree import DEFAULT_BASE
+
+    # Cells run tool-minimal by default (HERMETIC_DISALLOWED_TOOLS) — an agent-mode
+    # task needs Bash/file tools and would spend its expensive cells scoring ~0 for
+    # harness reasons. Warn loudly; a per-task tool policy is backlog (deferrals D6).
+    for selected in tasks:
+        if selected.mode == "agent" and selected.id in covered:
+            console.print(
+                f"[red]{selected.id} is an agent-mode task but cells run tool-minimal "
+                "(Bash/file tools denied) — it will likely score ~0 for harness reasons. "
+                "Relax ClaudeCodeRunner.disallowed_tools to run agentic tasks.[/red]"
+            )
+
     console.print(f"running {len(cells)} cells → {ledger}")
-    summary = run_sweep(tasks, parsed_grid, runner=runner, ledger_path=ledger)
+    summary = run_sweep(
+        tasks,
+        parsed_grid,
+        runner=runner,
+        ledger_path=ledger,
+        worktree_base=worktree_base if worktree_base is not None else DEFAULT_BASE,
+    )
     _print_summary(summary)
     if summary.failed:
         console.print(
