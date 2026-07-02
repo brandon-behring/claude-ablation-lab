@@ -60,9 +60,64 @@ ablation plot     results/ledger.jsonl --a repo@v1 --b repo@v2   # Pareto / effo
 
 > **Cost note:** on a Max/Pro subscription there is no per-call dollar charge; `total_cost_usd` is a comparability *metric*. The real budget is **rate-limit headroom** — a big sweep can throttle your normal Claude Code work, so runs are sequential, resumable, and `estimate` warns first. A hard usage cap halts the sweep cleanly and leaves the ledger resumable.
 
+## Results — the live showcase run (2026-07-02)
+
+The committed [`results/showcase.jsonl`](results/showcase.jsonl) is a real, sanitized 54-cell run
+of [`grids/showcase.yaml`](grids/showcase.yaml) (haiku/sonnet/opus × low/high effort × 3 epochs):
+**54/54 cells `ok`, zero infra failures, zero unparseable outputs, every config complete at 3/3
+epochs.** Total ≈ $3.09 cost-equivalent, ~9 minutes of cell time. Every number below reproduces
+from the committed file alone (`ablation report results/showcase.jsonl`, `ablation compare …`).
+
+**The headline — the harness detects a skill's effect, with an honest verdict:**
+
+| task | pairs | mean without-skill | mean with-skill | Δ (B−A) | exact p | real? |
+|------|-------|--------------------|-----------------|---------|---------|-------|
+| `t4_demo_infra` | 6 | 0.000 | 1.000 | **+1.000** | **0.0312** | **yes** |
+
+![A/B forest](docs/figures/compare_forest.png)
+
+This is a **designed positive control**, pre-registered in
+[`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) before the run: the same prompt runs under two refs
+of a tiny fixture repo, and only one ref ships `.claude/skills/project-reference/SKILL.md` — the
+prompt *directs* Claude to consult that skill (this measures prompt-directed skill consultation,
+not autonomous skill discovery). All 6 matched (model, effort) pairs moved 0.0 → 1.0, so the
+exact sign-flip test returns its minimum reachable p at n=6, `2/2⁶ = 0.0312` — a `real=yes` the
+verdict machinery *earns* rather than assumes (the bootstrap CI is effect-size context only).
+Mechanism was verified at the session level: **treatment cells' only tool call is
+`Skill("project-reference")`; control cells make zero tool calls** and return an honest empty
+answer (graded 0.0 `ok`, not excluded). Cells run hermetic and tool-minimal (`--strict-mcp-config`,
+exec/read/network tools disallowed) — see the pre-registration and the
+[checkpoint review](docs/design/2026-07-02_checkpoint-review.md) that forced that construction.
+
+**Context task:** `t3_verbatim_anchor` scored 1.000 at all 18 cells — saturated, so quality does
+not discriminate models/efforts here; cost and latency do (haiku/high is the Pareto point):
+
+![t4 pareto](docs/figures/t4_demo_infra_pareto.png)
+
+**Run the same experiment yourself** (fresh clone, ~$3 equivalent / ~15–35 min wall-clock):
+
+```bash
+examples/demo-infra/setup.sh                       # build the 2-ref fixture (zero calls)
+ablation run tasks/ grids/showcase.yaml --task t3_verbatim_anchor --task t4_demo_infra \
+    --ledger results/my-showcase.jsonl --worktree-base ../ablation-worktrees
+ablation compare results/my-showcase.jsonl --a .demo-infra@without-skill --b .demo-infra@with-skill
+```
+
+To test **your own** infra change instead, point a grid's `variants` at two refs of your repo
+(`yourrepo@main` vs `yourrepo@candidate` — the `grids/v1.yaml` pattern) and `compare` them; the
+same pre-registered verdict semantics apply.
+
 ## Status
 
-Alpha — Development phase. **Build phases 0–6 complete**: runner + worktree isolation, 4 graders (run/grade decoupled), grid + JSONL ledger + orchestrator (resumable, provenance-stamped, back-off/halt + an infra circuit breaker), DuckDB `report`/`compare` (exact sign-flip verdicts; honest unparseable accounting), `estimate`, `ablation plot` figures, and the reproducible [demo-infra showcase A/B](examples/demo-infra/README.md). Verified live end-to-end on a 4-cell smoke (run → grade → ledger → report → resume); a full-repo 3-lens ship-review (correctness · methodology · cold-read) is recorded in [`docs/design/2026-07-01_comprehensive-review.md`](docs/design/2026-07-01_comprehensive-review.md). The focused v1 sweep is user-driven (it spends real rate-limit headroom). See `CLAUDE.md` for conventions, [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how the numbers stay honest, and per-phase reviews in [`docs/design/`](docs/design/).
+Alpha — **build phases 0–6 complete and the public showcase shipped** (the live 54-cell run above, sanitized ledger + figures committed). Runner + worktree isolation with hermetic tool-minimal cells, 4 graders (run/grade decoupled), grid + JSONL ledger + orchestrator (resumable, provenance-stamped, back-off/halt + an infra circuit breaker), DuckDB `report`/`compare` (exact sign-flip verdicts; honest unparseable accounting), `estimate`, and `ablation plot` figures. A full-repo 3-lens ship-review (correctness · methodology · cold-read) is recorded in [`docs/design/2026-07-01_comprehensive-review.md`](docs/design/2026-07-01_comprehensive-review.md), and the pre-sweep checkpoint review in [`docs/design/2026-07-02_checkpoint-review.md`](docs/design/2026-07-02_checkpoint-review.md). The broader v1 sweep (T1/T2) is user-driven — it spends real rate-limit headroom. See `CLAUDE.md` for conventions, [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how the numbers stay honest, and per-phase reviews in [`docs/design/`](docs/design/).
+
+## Provenance
+
+This repo was built pair-style with **Claude Code**, directed and reviewed by the author: every
+phase went through multi-voice adversarial review (independent Claude / GPT / Gemini reviewers,
+findings tool-grounded before acceptance), with the full records in [`docs/design/`](docs/design/)
+and the one-line history in [`experiments/log.txt`](experiments/log.txt). The commit trailers say
+the same thing the README does.
 
 ## License
 

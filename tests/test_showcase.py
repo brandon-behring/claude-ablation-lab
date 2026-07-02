@@ -30,7 +30,8 @@ def _raw_row(**overrides: object) -> dict[str, object]:
         "value": 1.0,
         "grader_version": "t3-anchor-v2",
         "spec_sha": "a" * 12,
-        "infra_repo": ".demo-infra",
+        # live rows resolve this to an ABSOLUTE path — the sanitizer must drop it
+        "infra_repo": "/Users/someone/claude-ablation-lab/.demo-infra",
         "infra_sha": "b" * 12,
         "harness_sha": "c" * 12,
         "claude_version": "2.1.0",

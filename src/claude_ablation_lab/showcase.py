@@ -31,6 +31,9 @@ SHOWCASE_TASKS: frozenset[str] = frozenset({"t3_verbatim_anchor", "t4_demo_infra
 
 #: Fields removed from every published row: model output (previews/grader details),
 #: local filesystem pointers, session identity, and host-environment provenance.
+#: ``infra_repo`` is here because live rows store it as a *resolved absolute path*
+#: (caught by this scanner's first real run); ``variant`` + ``infra_sha`` carry the
+#: reader-relevant provenance, analysis never reads ``infra_repo``.
 STRIP_FIELDS: tuple[str, ...] = (
     "details",
     "output_preview",
@@ -39,6 +42,7 @@ STRIP_FIELDS: tuple[str, ...] = (
     "session_id",
     "mcp_servers",
     "global_layer",
+    "infra_repo",
 )
 
 #: No kept string may exceed this — long strings are how prompt/output text sneaks out.
