@@ -20,6 +20,22 @@ How the harness produces trustworthy numbers. Expanded as phases land.
   a verdict). The paired-bootstrap CI is **effect-size context only** — a same-sign
   percentile-bootstrap CI excludes 0 by construction at any magnitude (measured
   Type-I ≈ 21% at n=4), so it must never be the decision rule (2026-07-01 audit).
+- `advise` gives the last-mile **cost verdict** over the `report` cells: per (task, variant), the
+  cheapest config within `margin` of the **best** config that ran, plus the dollars and latency
+  saved versus a reflex config (e.g. `opus/max`). Flooring at the *best*, not the reflex, is
+  deliberate — a reflex that itself fails must not drag the floor down to admit a cheaper *failing*
+  config. Non-inferiority is a **margin** on the mean (`mean_value ≥ best − margin`, default `0.02`),
+  a point estimate rather than a p-value: `advise` sees only per-cell epoch means, and at these epoch
+  counts a per-cell test is underpowered — *not* because a paired test is impossible in principle
+  (the configs share the same task examples), but because the per-example/per-epoch scores are not
+  plumbed to this layer (`report` still carries the bootstrap CI for the uncertainty). Honesty rails:
+  the recommendation's **absolute** quality and its delta vs the reflex are both shown; a group whose
+  best config scores ≤ margin is flagged `n/a` and kept out of the overpay total; a cell carrying a
+  `report` validity flag (leakage / mixed spec / grader-version / unparseable) is flagged `⚠suspect`;
+  the reflex falls back transparently (`opus/max` → highest `opus` effort that ran → priciest cell,
+  flagged `*`); and `latency saved` may be negative (cheaper yet slower) — shown signed, never hidden.
+  **Scope:** this sees model×effort cost/latency-vs-quality only — workflow-level spend (multi-agent
+  review, planning rounds) is outside a single-task harness.
 - `infra_error` / `timeout` / `rate_limited` cells are **excluded from quality
   aggregation** but their rate is always reported (don't mistake infra failure for
   model failure). `unparseable` grades are the opposite case — the model produced
@@ -103,3 +119,4 @@ matched (model, effort) config pairs) runs under the following rules, fixed in a
 | 2026-07-02 | **Public showcase run** (54 cells, the pre-registered primary) | 54/54 `ok`, 0 unparseable, 18/18 configs at 3/3 epochs; t4 A/B: 6/6 pairs 0.0→1.0, Δ=+1.000, exact p=0.0312, `real=yes`; t3 saturated at 1.000; sanitized ledger (`results/showcase.jsonl`, sanitizer caught a live absolute-path leak in `infra_repo` on first use) + figures committed |
 | 2026-07-02 | D6 hardening (PR #11 review follow-ups) | task-scoped tool policy (agentic tasks declare `tools:`, no more hand-relaxing the runner); tool deny-list catalog live-verified against the installed CLI, catching a dead `"SlashCommand"` entry that gave zero actual protection; in-band mechanism capture via `stream-json` replaces the now-impossible session-file harvest; sanitizer inverted to an allow-list (`KEEP_FIELDS`) — `docs/design/2026-07-01_phase6-deferrals.md` §D6, `docs/design/2026-07-02_t2-runway.md` |
 | 2026-07-02 | D6 hardening — 3-voice adversarial review (codex + gemini + blind Claude subagent) | caught and fixed a live regression this PR would otherwise have shipped: `capture_mechanism`'s new default combined with T1's `--json-schema` would have silently broken every T1 cell (`--json-schema` is implemented as a synthetic `StructuredOutput` tool call, confirmed live, which the hermetic default was about to deny); also fixed `task.tools` YAML validation, `spec_sha` now covering tool-policy changes, `tools_used`/`tool_calls` `None`-vs-`{}` (not-measured vs. measured-zero) semantics, `estimate` sharing `run`'s version gate, and a CI-portability bug (the version gate broke on any machine without a `claude` binary matching the pin, including GitHub Actions — caught by literally stripping `claude` from `PATH` and re-running the suite). 5 findings refuted with evidence. Full tally — `docs/design/2026-07-02_d6-review.md` |
+| 2026-07-02 | `advise` — cost-frontier verdict (Phase 1) + 3-voice review | turns `report` into the "where am I overpaying?" answer: cheapest config within `margin` of the **best** that ran, saving vs a reflex config, with a transparent fallback. On the committed showcase, opus→haiku is **11–15× cheaper for +0.000 quality** (Σ $0.1704) on the saturated t3/t4 tasks; the without-skill control is flagged `n/a` and excluded. A codex + gemini + blind-Claude review then fixed, before merge: a **best-floor** selection bug (a failing reflex could recommend a cheaper *failing* config), the vacuous-row Σ inflation (37% of the headline came from an all-zero control), a mislabel and dead `note` path, strict reflex parsing, and an **overclaim** — the margin decision is a data-plumbing + low-power limit, *not* "a p-value would be theatre" (configs do share task examples). Honest scope: overpay on *easy* work only — a discriminating task is the next build. Zero new quota; 282 tests green — `docs/design/2026-07-02_cost-benchmark-map.md` |

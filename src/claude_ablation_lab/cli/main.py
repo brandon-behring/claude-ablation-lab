@@ -268,6 +268,37 @@ def compare(
 
 
 @app.command()
+def advise(
+    ledger: Annotated[Path, typer.Argument(help="JSONL ledger to analyze")],
+    reflex: Annotated[
+        str,
+        typer.Option("--reflex", help="Your expensive default as 'model/effort' (e.g. opus/max)"),
+    ] = "opus/max",
+    margin: Annotated[
+        float,
+        typer.Option(
+            "--margin",
+            help="Quality tolerance on [0,1] within which a cheaper config still counts as safe",
+        ),
+    ] = 0.02,
+) -> None:
+    """Where the reflex config overpays: cheapest non-inferior config + $ and seconds saved."""
+    from claude_ablation_lab.analyze import cost_advisor
+    from claude_ablation_lab.analyze import report as run_report
+
+    cells = run_report(ledger)
+    if not cells:
+        console.print(f"[yellow]no graded rows in {ledger}[/yellow]")
+        return
+    try:
+        advice = cost_advisor(cells, reflex=reflex, margin=margin)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from None
+    _print_advice(advice, reflex, margin)
+
+
+@app.command()
 def plot(
     ledger: Annotated[Path, typer.Argument(help="JSONL ledger to visualize")],
     out: Annotated[Path, typer.Option(help="Directory to write figures to")] = Path(
@@ -413,6 +444,51 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
         "⚠Nunp = N unparseable epochs counted as honest 0.0 · "
         "CI(epoch) at <5 epochs is the min–max epoch range, not a 95% CI"
     )
+
+
+def _print_advice(advice: list, reflex: str, margin: float) -> None:  # type: ignore[type-arg]
+    """Render per-(task, variant) cost recommendations (biggest overpay first)."""
+    table = Table(
+        title=f"advise — cheapest config within margin {margin:g} of the best (vs {reflex})"
+    )
+    for col in ("task", "variant", "reflex→use", "save$", "×", "qual", "n", "Δlat s", "why"):
+        table.add_column(col)
+    total = 0.0
+    any_fallback = any_suspect = any_vacuous = False
+    for a in advice:
+        if not a.vacuous:  # a vacuous row (best ≤ margin) is not a real overpay
+            total += max(0.0, a.cost_saving)
+        any_fallback = any_fallback or a.reflex_fallback
+        any_suspect = any_suspect or a.suspect
+        any_vacuous = any_vacuous or a.vacuous
+        star = "*" if a.reflex_fallback else ""
+        table.add_row(
+            a.task_id,
+            a.variant,
+            f"{a.reflex_model}/{a.reflex_effort}{star}→{a.rec_model}/{a.rec_effort}",
+            _fmt(a.cost_saving, 4),
+            "—" if a.cost_multiple is None else f"{a.cost_multiple:.1f}×",
+            _fmt(a.rec_value),
+            str(a.n_epochs),
+            _fmt(a.latency_saving, 1),
+            a.note,
+        )
+    console.print(table)
+    legend = [
+        f"Σ per-run overpay (excl. n/a rows): [bold]${total:.4f}[/bold]",
+        "qual = recommended config's absolute mean quality",
+        "Δlat s = reflex − use (negative = cheaper yet slower)",
+        "a point estimate at n epochs (run-variance, not a population; `report` has the CIs)",
+    ]
+    if any_fallback:
+        legend.append("* exact reflex absent; measured vs the nearest config that ran")
+    if any_suspect:
+        legend.append(
+            "⚠suspect = a report validity flag (leakage / mixed spec / grader-version / unparseable)"
+        )
+    if any_vacuous:
+        legend.append("n/a = best config scores ≤ margin (nothing meaningfully works)")
+    console.print(" · ".join(legend))
 
 
 def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-arg]

@@ -31,4 +31,13 @@ def test_cli_exposes_exactly_the_expected_commands() -> None:
         cmd.name or cmd.callback.__name__  # type: ignore[union-attr]
         for cmd in app.registered_commands
     }
-    assert registered == {"version", "run", "regrade", "estimate", "report", "compare", "plot"}
+    assert registered == {
+        "version",
+        "run",
+        "regrade",
+        "estimate",
+        "report",
+        "compare",
+        "advise",
+        "plot",
+    }
