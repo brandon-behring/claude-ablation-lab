@@ -123,6 +123,34 @@ def test_compare_renders_a_real_verdict(tmp_path) -> None:
     assert "yes" in result.stdout and "0.031" in result.stdout
 
 
+@pytest.mark.unit
+def test_advise_renders_downgrade(tmp_path) -> None:
+    # opus/high and haiku/high tie on quality; haiku far cheaper → a downgrade row.
+    led = tmp_path / "ledger.jsonl"
+    _ledger_row(led, run_id="o", model="opus", effort="high", value=1.0, cost_usd=0.08)
+    _ledger_row(led, run_id="h", model="haiku", effort="high", value=1.0, cost_usd=0.005)
+    result = cli.invoke(app, ["advise", str(led), "--reflex", "opus/high"])
+    assert result.exit_code == 0
+    assert "advise" in result.stdout  # the table title rendered (not the empty-ledger path)
+    assert "overpay" in result.stdout  # the savings footnote
+
+
+@pytest.mark.unit
+def test_advise_bad_reflex_exits_2(tmp_path) -> None:
+    led = tmp_path / "ledger.jsonl"
+    _ledger_row(led, run_id="o", model="opus", effort="high", value=1.0, cost_usd=0.08)
+    result = cli.invoke(app, ["advise", str(led), "--reflex", "opusmax"])
+    assert result.exit_code == 2
+    assert "model/effort" in result.stdout
+
+
+@pytest.mark.unit
+def test_advise_empty_ledger_message(tmp_path) -> None:
+    result = cli.invoke(app, ["advise", str(tmp_path / "none.jsonl")])
+    assert result.exit_code == 0
+    assert "no graded rows" in result.stdout
+
+
 def _estimate(status: str) -> object:
     """A canned Estimate; ``estimate`` imports estimate_sweep at call time so we stub it."""
     from claude_ablation_lab import orchestrate

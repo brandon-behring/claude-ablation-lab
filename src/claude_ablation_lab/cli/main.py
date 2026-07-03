@@ -24,7 +24,7 @@ from claude_ablation_lab.grid import expand_grid, load_grid
 from claude_ablation_lab.task import Task, load_all, load_task
 
 if TYPE_CHECKING:
-    from claude_ablation_lab.analyze import CompareRow
+    from claude_ablation_lab.analyze import AdviceRow, CompareRow
     from claude_ablation_lab.orchestrate import Estimate, SweepSummary
 
 app = typer.Typer(
@@ -268,6 +268,37 @@ def compare(
 
 
 @app.command()
+def advise(
+    ledger: Annotated[Path, typer.Argument(help="JSONL ledger to analyze")],
+    reflex: Annotated[
+        str,
+        typer.Option("--reflex", help="Your expensive default as 'model/effort' (e.g. opus/max)"),
+    ] = "opus/max",
+    margin: Annotated[
+        float,
+        typer.Option(
+            "--margin",
+            help="Quality tolerance on [0,1] within which a cheaper config still counts as safe",
+        ),
+    ] = 0.02,
+) -> None:
+    """Where the reflex config overpays: cheapest non-inferior config + $ and seconds saved."""
+    from claude_ablation_lab.analyze import cost_advisor
+    from claude_ablation_lab.analyze import report as run_report
+
+    cells = run_report(ledger)
+    if not cells:
+        console.print(f"[yellow]no graded rows in {ledger}[/yellow]")
+        return
+    try:
+        advice = cost_advisor(cells, reflex=reflex, margin=margin)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from None
+    _print_advice(advice, reflex, margin)
+
+
+@app.command()
 def plot(
     ledger: Annotated[Path, typer.Argument(help="JSONL ledger to visualize")],
     out: Annotated[Path, typer.Option(help="Directory to write figures to")] = Path(
@@ -413,6 +444,51 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
         "⚠Nunp = N unparseable epochs counted as honest 0.0 · "
         "CI(epoch) at <5 epochs is the min–max epoch range, not a 95% CI"
     )
+
+
+def _advice_why(a: AdviceRow) -> str:
+    """One terse cell explaining the recommendation (kept out of the wide table)."""
+    if a.reflex_value <= 0.0:
+        return "n/a: all configs score 0"
+    if a.rec_model == a.reflex_model and a.rec_effort == a.reflex_effort:
+        return "already optimal"
+    if a.quality_delta > 0:
+        return f"+{a.quality_delta:.3f} & cheaper"
+    if a.quality_delta < 0:
+        return f"{a.quality_delta:.3f} ≤ δ"
+    return "tie, cheaper"
+
+
+def _print_advice(advice: list, reflex: str, margin: float) -> None:  # type: ignore[type-arg]
+    """Render per-(task, variant) cost-downgrade recommendations (biggest overpay first)."""
+    table = Table(title=f"advise — cheapest config within margin {margin:g} of {reflex}")
+    for col in ("task", "variant", "reflex→use", "Δqual", "save$", "×", "Δlat s", "why"):
+        table.add_column(col)
+    total = 0.0
+    any_fallback = False
+    for a in advice:
+        total += max(0.0, a.cost_saving)
+        any_fallback = any_fallback or a.reflex_fallback
+        star = "*" if a.reflex_fallback else ""
+        table.add_row(
+            a.task_id,
+            a.variant,
+            f"{a.reflex_model}/{a.reflex_effort}{star}→{a.rec_model}/{a.rec_effort}",
+            _fmt(a.quality_delta),
+            _fmt(a.cost_saving, 4),
+            "—" if a.cost_multiple is None else f"{a.cost_multiple:.1f}×",
+            _fmt(a.latency_saving, 1),
+            _advice_why(a),
+        )
+    console.print(table)
+    footnote = (
+        f"Σ per-run overpay: [bold]${total:.4f}[/bold] · Δqual = use − reflex "
+        f"(≥ −{margin:g} by construction; + = cheaper AND better) · point estimate at "
+        "these epochs — raise --margin to downgrade harder, add epochs to tighten"
+    )
+    if any_fallback:
+        footnote += " · * exact reflex absent from ledger; measured vs the nearest config that ran"
+    console.print(footnote)
 
 
 def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-arg]

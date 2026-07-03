@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_ablation_lab.analyze import compare, report
+from claude_ablation_lab.analyze import ReportCell, compare, cost_advisor, report
 from claude_ablation_lab.ledger import LedgerRow, append_row
 
 # eval_toolkit backs only the bootstrap CIs (report cells with >=3 epochs, compare
@@ -264,3 +264,162 @@ def test_compare_no_common_task_returns_empty(tmp_path) -> None:
     led = tmp_path / "l.jsonl"
     _row(led, rid="a0", task="t2", variant="repo@a", value=0.5)  # only under A
     assert compare(led, "repo@a", "repo@b") == []
+
+
+# --- cost_advisor (Phase 1: where the reflex config overpays) -----------------
+
+
+def _cell(
+    *,
+    task: str = "t1",
+    model: str = "haiku",
+    effort: str = "low",
+    variant: str = "none",
+    value: float = 1.0,
+    cost: float = 0.01,
+    lat: float = 1.0,
+    n: int = 3,
+) -> ReportCell:
+    """A ReportCell with only the fields cost_advisor reads set (rest defaulted)."""
+    return ReportCell(
+        task_id=task,
+        model=model,
+        effort=effort,
+        variant=variant,
+        n_epochs=n,
+        n_spec=1,
+        mean_value=value,
+        sd_value=None,
+        mean_cost=cost,
+        mean_latency=lat,
+        ci_low=None,
+        ci_high=None,
+        shuffled_auroc=None,
+    )
+
+
+@pytest.mark.unit
+def test_advise_recommends_cheapest_on_quality_tie() -> None:
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.080, lat=12.0),
+        _cell(model="sonnet", effort="high", value=1.0, cost=0.050, lat=10.0),
+        _cell(model="haiku", effort="high", value=1.0, cost=0.005, lat=8.0),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
+    assert (row.rec_model, row.rec_effort) == ("haiku", "high")
+    assert row.reflex_fallback is False  # opus/high was present exactly
+    assert row.quality_delta == pytest.approx(0.0)
+    assert row.cost_saving == pytest.approx(0.075)
+    assert row.cost_multiple == pytest.approx(0.080 / 0.005)
+    assert row.latency_saving == pytest.approx(4.0)
+    assert "equal-or-better" in row.note
+
+
+@pytest.mark.unit
+def test_advise_respects_margin_boundary() -> None:
+    # haiku is 0.01 below reflex (inside δ=0.02); sonnet is 0.10 below (outside) yet cheaper.
+    cells = [
+        _cell(model="opus", effort="low", value=1.00, cost=0.090),
+        _cell(model="haiku", effort="high", value=0.99, cost=0.010),
+        _cell(model="sonnet", effort="low", value=0.90, cost=0.005),
+    ]
+    [tight] = cost_advisor(cells, reflex="opus/low", margin=0.02)
+    assert (tight.rec_model, tight.rec_effort) == ("haiku", "high")  # sonnet excluded by margin
+    assert tight.quality_delta == pytest.approx(-0.01)
+    assert "within margin" in tight.note
+    # Widen the tolerance and the cheaper-but-worse sonnet becomes admissible.
+    [loose] = cost_advisor(cells, reflex="opus/low", margin=0.20)
+    assert (loose.rec_model, loose.rec_effort) == ("sonnet", "low")
+
+
+@pytest.mark.unit
+def test_advise_reflex_falls_back_to_highest_effort_of_model() -> None:
+    # No opus/max in the ledger → measure vs the highest opus effort that ran (high).
+    cells = [
+        _cell(model="opus", effort="low", value=1.0, cost=0.07),
+        _cell(model="opus", effort="high", value=1.0, cost=0.09),
+        _cell(model="haiku", effort="high", value=1.0, cost=0.006),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/max", margin=0.02)
+    assert (row.reflex_model, row.reflex_effort) == ("opus", "high")
+    assert row.reflex_fallback is True
+    assert "opus/max absent" in row.note
+    assert (row.rec_model, row.rec_effort) == ("haiku", "high")
+
+
+@pytest.mark.unit
+def test_advise_reflex_falls_back_to_priciest_when_model_absent() -> None:
+    cells = [
+        _cell(model="haiku", effort="high", value=1.0, cost=0.006),
+        _cell(model="sonnet", effort="high", value=1.0, cost=0.050),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/max", margin=0.02)
+    assert (row.reflex_model, row.reflex_effort) == ("sonnet", "high")  # priciest that ran
+    assert row.reflex_fallback is True and "priciest" in row.note
+
+
+@pytest.mark.unit
+def test_advise_already_optimal_when_reflex_is_cheapest() -> None:
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.01),  # reflex AND cheapest
+        _cell(model="haiku", effort="high", value=1.0, cost=0.02),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
+    assert (row.rec_model, row.rec_effort) == ("opus", "high")
+    assert row.cost_saving == pytest.approx(0.0)
+    assert "already cheapest" in row.note
+
+
+@pytest.mark.unit
+def test_advise_single_config_notes_it() -> None:
+    [row] = cost_advisor([_cell(model="opus", effort="high")], reflex="opus/high")
+    assert (row.rec_model, row.rec_effort) == ("opus", "high")
+    assert row.cost_saving == pytest.approx(0.0) and "only one config" in row.note
+
+
+@pytest.mark.unit
+def test_advise_free_recommendation_has_no_multiple() -> None:
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.08),
+        _cell(model="haiku", effort="low", value=1.0, cost=0.0),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/high")
+    assert row.rec_cost == pytest.approx(0.0)
+    assert row.cost_multiple is None  # no division by zero
+
+
+@pytest.mark.unit
+def test_advise_orders_by_dollar_saving_descending() -> None:
+    cells = [
+        _cell(task="t_small", model="opus", effort="high", cost=0.02),
+        _cell(task="t_small", model="haiku", effort="low", cost=0.01),
+        _cell(task="t_big", model="opus", effort="high", cost=0.10),
+        _cell(task="t_big", model="haiku", effort="low", cost=0.01),
+    ]
+    advice = cost_advisor(cells, reflex="opus/high")
+    assert [a.task_id for a in advice] == ["t_big", "t_small"]  # biggest overpay first
+
+
+@pytest.mark.unit
+def test_advise_groups_by_variant() -> None:
+    cells = [
+        _cell(task="t4", variant="repo@with", model="opus", effort="high", value=1.0, cost=0.10),
+        _cell(task="t4", variant="repo@with", model="haiku", effort="low", value=1.0, cost=0.01),
+        _cell(task="t4", variant="repo@without", model="opus", effort="high", value=1.0, cost=0.09),
+        _cell(task="t4", variant="repo@without", model="haiku", effort="low", value=1.0, cost=0.01),
+    ]
+    advice = cost_advisor(cells, reflex="opus/high")
+    assert {a.variant for a in advice} == {"repo@with", "repo@without"}  # one row per variant
+
+
+@pytest.mark.unit
+def test_advise_empty_cells_is_empty() -> None:
+    assert cost_advisor([]) == []
+
+
+@pytest.mark.unit
+def test_advise_rejects_malformed_reflex_and_margin() -> None:
+    with pytest.raises(ValueError, match="model/effort"):
+        cost_advisor([_cell()], reflex="opusmax")
+    with pytest.raises(ValueError, match="margin"):
+        cost_advisor([_cell()], reflex="opus/high", margin=1.5)

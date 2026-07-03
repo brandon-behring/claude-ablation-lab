@@ -50,7 +50,15 @@ import numpy as np
 # ``report``/``compare`` --help paths — do not hard-require the optional eval-toolkit
 # dependency. ``tests/test_analyze.py`` guards with ``pytest.importorskip``.
 
-__all__ = ["ReportCell", "CompareRow", "report", "compare", "LEAKAGE_BAND"]
+__all__ = [
+    "ReportCell",
+    "CompareRow",
+    "AdviceRow",
+    "report",
+    "compare",
+    "cost_advisor",
+    "LEAKAGE_BAND",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -141,6 +149,47 @@ class CompareRow:
     p_value: float | None = None
     #: nonzero paired diffs the test ran on (zero diffs carry no directional evidence).
     n_nonzero: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AdviceRow:
+    """A per-(task, variant) cost-downgrade recommendation.
+
+    The cheapest config whose quality is *non-inferior* to the reflex config —
+    within ``margin`` on the mean. At the few epochs this harness runs the decision
+    is deliberately a **point estimate within a margin**, not a significance test:
+    epochs are exploratory run-variance (see the module docstring), and two
+    *different configs'* epochs are not the matched pairs ``compare``'s sign-flip
+    test needs (same inputs, one axis changed), so a p-value here would be theatre.
+    The quality delta is surfaced verbatim, so a downgrade that trades a little
+    quality for a lot of cost is never hidden — the reader (or ``--margin``) judges.
+    """
+
+    task_id: str
+    variant: str
+    #: the expensive default this recommendation is measured against (possibly a
+    #: fallback if the exact reflex config was not in the ledger — see ``note``).
+    reflex_model: str
+    reflex_effort: str
+    reflex_value: float
+    reflex_cost: float
+    reflex_latency: float
+    rec_model: str
+    rec_effort: str
+    rec_value: float
+    rec_cost: float
+    rec_latency: float
+    #: recommended − reflex mean quality (≥ −margin by construction; ≤ 0 = a downgrade).
+    quality_delta: float
+    #: reflex − recommended mean cost, USD per run (the per-run overpay if positive).
+    cost_saving: float
+    #: reflex_cost / rec_cost, or ``None`` when the recommendation is free.
+    cost_multiple: float | None
+    #: reflex − recommended mean latency, seconds (may be negative: cheaper yet slower).
+    latency_saving: float
+    #: True if the exact reflex config was absent and a fallback stood in (see ``note``).
+    reflex_fallback: bool = False
+    note: str = ""
 
 
 def _connect() -> duckdb.DuckDBPyConnection:
@@ -363,3 +412,104 @@ def _compare_task(
         p_value=p_value,
         n_nonzero=n_nonzero,
     )
+
+
+#: effort ordering for the reflex "highest available effort" fallback.
+_EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "max": 3}
+
+
+def _resolve_reflex(group: list[ReportCell], model: str, effort: str) -> tuple[ReportCell, str]:
+    """Pick the cell standing in for the user's expensive reflex, with fallbacks.
+
+    exact ``(model, effort)`` → same model at its highest effort that ran → the
+    single priciest cell in the group. Returns the cell and a note naming the
+    fallback used (empty string when the exact reflex config was present). The
+    priciest-cell fallback keeps ``advise`` meaningful on a ledger that never ran
+    the named reflex at all — it measures against the most expensive thing that did.
+    """
+    exact = [c for c in group if c.model == model and c.effort == effort]
+    if exact:
+        return exact[0], ""
+    same_model = [c for c in group if c.model == model]
+    if same_model:
+        cell = max(same_model, key=lambda c: _EFFORT_ORDER.get(c.effort, -1))
+        return cell, f"{model}/{effort} absent — measured vs {cell.model}/{cell.effort}"
+    priciest = max(group, key=lambda c: c.mean_cost)
+    return (
+        priciest,
+        f"{model}/{effort} absent — measured vs priciest {priciest.model}/{priciest.effort}",
+    )
+
+
+def cost_advisor(
+    cells: list[ReportCell],
+    reflex: str = "opus/max",
+    margin: float = 0.02,
+) -> list[AdviceRow]:
+    """Per (task, variant): the cheapest config non-inferior to the reflex, and the saving.
+
+    For each ``(task_id, variant)`` group, resolve the *reflex* config (the
+    expensive default, e.g. ``opus/max``, with the fallbacks in
+    :func:`_resolve_reflex`) and recommend the **lowest-cost** cell whose
+    ``mean_value`` is within ``margin`` of the reflex's. ``margin`` is an absolute
+    tolerance on the ``[0, 1]`` metric (default ``0.02``). Rows are ordered by
+    dollar saving descending — the biggest overpay first. See :class:`AdviceRow`
+    on why this is a margin decision rather than a p-value.
+    """
+    try:
+        r_model, r_effort = reflex.split("/", 1)
+    except ValueError:
+        raise ValueError(f"reflex must be 'model/effort' (got {reflex!r})") from None
+    if not 0.0 <= margin <= 1.0:
+        raise ValueError(f"margin must be in [0, 1] (got {margin})")
+
+    groups: dict[tuple[str, str], list[ReportCell]] = {}
+    for c in cells:
+        groups.setdefault((c.task_id, c.variant), []).append(c)
+
+    advice: list[AdviceRow] = []
+    for (task_id, variant), group in groups.items():
+        reflex_cell, fallback_note = _resolve_reflex(group, r_model, r_effort)
+        # Non-inferior = within margin on the mean. Reflex itself always qualifies.
+        candidates = [c for c in group if c.mean_value >= reflex_cell.mean_value - margin]
+        # Cheapest wins; deterministic tie-break so equal-cost cells never reorder.
+        rec = min(candidates, key=lambda c: (c.mean_cost, c.mean_latency, c.model, c.effort))
+
+        notes = [fallback_note] if fallback_note else []
+        if rec.model == reflex_cell.model and rec.effort == reflex_cell.effort:
+            notes.append(
+                "already cheapest non-inferior" if len(group) > 1 else "only one config ran"
+            )
+        elif rec.mean_value < reflex_cell.mean_value:
+            notes.append(
+                f"−{reflex_cell.mean_value - rec.mean_value:.3f} quality within margin {margin:g}"
+            )
+        else:
+            notes.append("cheaper at equal-or-better quality")
+
+        advice.append(
+            AdviceRow(
+                task_id=task_id,
+                variant=variant,
+                reflex_model=reflex_cell.model,
+                reflex_effort=reflex_cell.effort,
+                reflex_value=reflex_cell.mean_value,
+                reflex_cost=reflex_cell.mean_cost,
+                reflex_latency=reflex_cell.mean_latency,
+                rec_model=rec.model,
+                rec_effort=rec.effort,
+                rec_value=rec.mean_value,
+                rec_cost=rec.mean_cost,
+                rec_latency=rec.mean_latency,
+                quality_delta=rec.mean_value - reflex_cell.mean_value,
+                cost_saving=reflex_cell.mean_cost - rec.mean_cost,
+                cost_multiple=(
+                    (reflex_cell.mean_cost / rec.mean_cost) if rec.mean_cost > 0 else None
+                ),
+                latency_saving=reflex_cell.mean_latency - rec.mean_latency,
+                reflex_fallback=bool(fallback_note),
+                note="; ".join(notes),
+            )
+        )
+    advice.sort(key=lambda a: a.cost_saving, reverse=True)
+    return advice

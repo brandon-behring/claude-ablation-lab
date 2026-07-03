@@ -20,6 +20,16 @@ How the harness produces trustworthy numbers. Expanded as phases land.
   a verdict). The paired-bootstrap CI is **effect-size context only** — a same-sign
   percentile-bootstrap CI excludes 0 by construction at any magnitude (measured
   Type-I ≈ 21% at n=4), so it must never be the decision rule (2026-07-01 audit).
+- `advise` gives the last-mile **cost verdict** over the `report` cells: per (task, variant),
+  the cheapest config **non-inferior** to a reflex config (e.g. `opus/max`) plus the dollars and
+  seconds saved. Non-inferior is a **margin** on the mean (`mean_value ≥ reflex − margin`, default
+  `0.02`), deliberately **not** a p-value — two *different configs'* epochs are not the matched
+  pairs `compare`'s sign-flip test needs (changing the model changes the unit), and at these epoch
+  counts a significance claim would be theatre (consistent with the epoch-range honesty above). The
+  quality delta is shown verbatim so a within-margin downgrade is never hidden; the reflex falls
+  back transparently (`opus/max` → highest `opus` effort that ran → priciest cell, flagged `*`).
+  **Scope:** this sees model×effort cost/latency-vs-quality only — workflow-level spend (multi-agent
+  review, planning rounds) is outside a single-task harness.
 - `infra_error` / `timeout` / `rate_limited` cells are **excluded from quality
   aggregation** but their rate is always reported (don't mistake infra failure for
   model failure). `unparseable` grades are the opposite case — the model produced
@@ -103,3 +113,4 @@ matched (model, effort) config pairs) runs under the following rules, fixed in a
 | 2026-07-02 | **Public showcase run** (54 cells, the pre-registered primary) | 54/54 `ok`, 0 unparseable, 18/18 configs at 3/3 epochs; t4 A/B: 6/6 pairs 0.0→1.0, Δ=+1.000, exact p=0.0312, `real=yes`; t3 saturated at 1.000; sanitized ledger (`results/showcase.jsonl`, sanitizer caught a live absolute-path leak in `infra_repo` on first use) + figures committed |
 | 2026-07-02 | D6 hardening (PR #11 review follow-ups) | task-scoped tool policy (agentic tasks declare `tools:`, no more hand-relaxing the runner); tool deny-list catalog live-verified against the installed CLI, catching a dead `"SlashCommand"` entry that gave zero actual protection; in-band mechanism capture via `stream-json` replaces the now-impossible session-file harvest; sanitizer inverted to an allow-list (`KEEP_FIELDS`) — `docs/design/2026-07-01_phase6-deferrals.md` §D6, `docs/design/2026-07-02_t2-runway.md` |
 | 2026-07-02 | D6 hardening — 3-voice adversarial review (codex + gemini + blind Claude subagent) | caught and fixed a live regression this PR would otherwise have shipped: `capture_mechanism`'s new default combined with T1's `--json-schema` would have silently broken every T1 cell (`--json-schema` is implemented as a synthetic `StructuredOutput` tool call, confirmed live, which the hermetic default was about to deny); also fixed `task.tools` YAML validation, `spec_sha` now covering tool-policy changes, `tools_used`/`tool_calls` `None`-vs-`{}` (not-measured vs. measured-zero) semantics, `estimate` sharing `run`'s version gate, and a CI-portability bug (the version gate broke on any machine without a `claude` binary matching the pin, including GitHub Actions — caught by literally stripping `claude` from `PATH` and re-running the suite). 5 findings refuted with evidence. Full tally — `docs/design/2026-07-02_d6-review.md` |
+| 2026-07-02 | `advise` — cost-frontier verdict (Phase 1) | turns `report` into the "where am I overpaying?" answer: cheapest config **non-inferior** (margin on the mean, not a p-value — different-config epochs aren't matched pairs) to a reflex config, with `$` + latency saved and a transparent reflex fallback. On the committed showcase ledger, opus→haiku is **11–15× cheaper for +0.000 quality** on the saturated t3/t4 tasks. Honest scope: overpay on *easy* work only — a discriminating (non-saturated) task is the next build. Zero new quota; 275 tests green |
