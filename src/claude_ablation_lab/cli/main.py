@@ -24,7 +24,7 @@ from claude_ablation_lab.grid import expand_grid, load_grid
 from claude_ablation_lab.task import Task, load_all, load_task
 
 if TYPE_CHECKING:
-    from claude_ablation_lab.analyze import AdviceRow, CompareRow
+    from claude_ablation_lab.analyze import CompareRow
     from claude_ablation_lab.orchestrate import Estimate, SweepSummary
 
 app = typer.Typer(
@@ -446,49 +446,49 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
     )
 
 
-def _advice_why(a: AdviceRow) -> str:
-    """One terse cell explaining the recommendation (kept out of the wide table)."""
-    if a.reflex_value <= 0.0:
-        return "n/a: all configs score 0"
-    if a.rec_model == a.reflex_model and a.rec_effort == a.reflex_effort:
-        return "already optimal"
-    if a.quality_delta > 0:
-        return f"+{a.quality_delta:.3f} & cheaper"
-    if a.quality_delta < 0:
-        return f"{a.quality_delta:.3f} ≤ δ"
-    return "tie, cheaper"
-
-
 def _print_advice(advice: list, reflex: str, margin: float) -> None:  # type: ignore[type-arg]
-    """Render per-(task, variant) cost-downgrade recommendations (biggest overpay first)."""
-    table = Table(title=f"advise — cheapest config within margin {margin:g} of {reflex}")
-    for col in ("task", "variant", "reflex→use", "Δqual", "save$", "×", "Δlat s", "why"):
+    """Render per-(task, variant) cost recommendations (biggest overpay first)."""
+    table = Table(
+        title=f"advise — cheapest config within margin {margin:g} of the best (vs {reflex})"
+    )
+    for col in ("task", "variant", "reflex→use", "save$", "×", "qual", "n", "Δlat s", "why"):
         table.add_column(col)
     total = 0.0
-    any_fallback = False
+    any_fallback = any_suspect = any_vacuous = False
     for a in advice:
-        total += max(0.0, a.cost_saving)
+        if not a.vacuous:  # a vacuous row (best ≤ margin) is not a real overpay
+            total += max(0.0, a.cost_saving)
         any_fallback = any_fallback or a.reflex_fallback
+        any_suspect = any_suspect or a.suspect
+        any_vacuous = any_vacuous or a.vacuous
         star = "*" if a.reflex_fallback else ""
         table.add_row(
             a.task_id,
             a.variant,
             f"{a.reflex_model}/{a.reflex_effort}{star}→{a.rec_model}/{a.rec_effort}",
-            _fmt(a.quality_delta),
             _fmt(a.cost_saving, 4),
             "—" if a.cost_multiple is None else f"{a.cost_multiple:.1f}×",
+            _fmt(a.rec_value),
+            str(a.n_epochs),
             _fmt(a.latency_saving, 1),
-            _advice_why(a),
+            a.note,
         )
     console.print(table)
-    footnote = (
-        f"Σ per-run overpay: [bold]${total:.4f}[/bold] · Δqual = use − reflex "
-        f"(≥ −{margin:g} by construction; + = cheaper AND better) · point estimate at "
-        "these epochs — raise --margin to downgrade harder, add epochs to tighten"
-    )
+    legend = [
+        f"Σ per-run overpay (excl. n/a rows): [bold]${total:.4f}[/bold]",
+        "qual = recommended config's absolute mean quality",
+        "Δlat s = reflex − use (negative = cheaper yet slower)",
+        "a point estimate at n epochs (run-variance, not a population; `report` has the CIs)",
+    ]
     if any_fallback:
-        footnote += " · * exact reflex absent from ledger; measured vs the nearest config that ran"
-    console.print(footnote)
+        legend.append("* exact reflex absent; measured vs the nearest config that ran")
+    if any_suspect:
+        legend.append(
+            "⚠suspect = a report validity flag (leakage / mixed spec / grader-version / unparseable)"
+        )
+    if any_vacuous:
+        legend.append("n/a = best config scores ≤ margin (nothing meaningfully works)")
+    console.print(" · ".join(legend))
 
 
 def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-arg]

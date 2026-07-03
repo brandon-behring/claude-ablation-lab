@@ -43,7 +43,7 @@ ablation estimate tasks/ grids/v1.yaml             # run ONE cell, project token
 ablation run      tasks/ grids/v1.yaml             # sequential, resumable → results/ledger.jsonl
 ablation report   results/ledger.jsonl             # mean±CI, cost, latency, Pareto, leakage flag
 ablation compare  results/ledger.jsonl --a repo@v1 --b repo@v2   # paired-bootstrap "is it real?"
-ablation advise   results/ledger.jsonl --reflex opus/max         # cheapest config that loses no quality — $ + latency saved
+ablation advise   results/ledger.jsonl --reflex opus/max         # cheapest config within the quality margin — $ + latency saved
 ablation regrade  tasks/ --ledger results/ledger.jsonl           # re-score stored runs, no calls
 ablation plot     results/ledger.jsonl --a repo@v1 --b repo@v2   # Pareto / effort / A-B forest figures
 ```
@@ -98,18 +98,22 @@ not discriminate models/efforts here; cost does (haiku/high is the quality-vs-co
 ![t3 pareto](docs/figures/t3_verbatim_anchor_pareto.png)
 
 **Where the reflex overpays** — that saturation makes the cost question sharp. `ablation advise
-results/showcase.jsonl` reads the committed ledger and names the cheapest config whose quality is
-non-inferior to an `opus/max` reflex (absent from this low/high grid, so measured against `opus/high`):
+results/showcase.jsonl` reads the committed ledger and names the cheapest config within `margin` of
+the **best** config, versus an `opus/max` reflex (absent from this low/high grid, so measured against
+`opus/high`) — this is the verbatim output:
 
-| task (variant) | reflex → use | Δquality | save $/run | × |
+| task (variant) | reflex → use | qual | save $/run | × |
 |---|---|---|---|---|
-| `t4_demo_infra` (with-skill) | opus/high → **haiku/high** | 0.000 | $0.114 | **14.6×** |
-| `t3_verbatim_anchor` | opus/high → **haiku/high** | 0.000 | $0.057 | **11.1×** |
+| `t4_demo_infra` (with-skill) | opus/high → **haiku/high** | 1.000 | $0.114 | **14.6×** |
+| `t3_verbatim_anchor` (none) | opus/high → **haiku/high** | 1.000 | $0.057 | **11.1×** |
+| `t4_demo_infra` (without-skill) | — | 0.000 | *n/a* | — |
 
-Reaching for Opus on these extraction-shaped tasks buys **nothing** — ≈$0.17/run overpay for +0.000
-quality. Honest scope: both are *saturated* tasks where every config already scores 1.000, so this
-shows the method and the overpay on *easy* work — **not** that Opus is wasteful on hard work with a
-real quality gradient. That needs a task that discriminates, which is why the suite is growing one.
+**Σ per-run overpay: $0.1704** — reaching for Opus on these extraction-shaped tasks buys **nothing**.
+The without-skill control scores 0.000 at every config, so `advise` flags it `n/a` (best ≤ margin)
+and keeps it out of the total rather than banking a meaningless "saving." Honest scope: the two real
+rows are *saturated* tasks where every config already scores 1.000, so this shows the method and the
+overpay on *easy* work — **not** that Opus is wasteful on hard work with a real quality gradient. That
+needs a task that discriminates, which is why the suite is growing one.
 
 **Run the same experiment yourself** (fresh clone, ~$3 equivalent / ~15–35 min wall-clock):
 

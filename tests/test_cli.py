@@ -151,6 +151,30 @@ def test_advise_empty_ledger_message(tmp_path) -> None:
     assert "no graded rows" in result.stdout
 
 
+@pytest.mark.unit
+def test_advise_total_excludes_vacuous_rows(tmp_path) -> None:
+    # A real downgrade ($0.07 saved) plus an all-zero task (would add $0.04) — the vacuous
+    # row must render "n/a" and NOT inflate the headline Σ (the shipped-data bug the review
+    # caught: a control variant banking 37% of the total).
+    led = tmp_path / "ledger.jsonl"
+    _ledger_row(
+        led, run_id="a1", task_id="real", model="opus", effort="high", value=1.0, cost_usd=0.08
+    )
+    _ledger_row(
+        led, run_id="a2", task_id="real", model="haiku", effort="high", value=1.0, cost_usd=0.01
+    )
+    _ledger_row(
+        led, run_id="b1", task_id="dead", model="opus", effort="high", value=0.0, cost_usd=0.05
+    )
+    _ledger_row(
+        led, run_id="b2", task_id="dead", model="haiku", effort="high", value=0.0, cost_usd=0.01
+    )
+    result = cli.invoke(app, ["advise", str(led), "--reflex", "opus/high"])
+    assert result.exit_code == 0
+    assert "0.0700" in result.stdout  # only the real task's saving; the dead task is excluded
+    assert "n/a" in result.stdout  # the dead task is shown but flagged, not silently dropped
+
+
 def _estimate(status: str) -> object:
     """A canned Estimate; ``estimate`` imports estimate_sweep at call time so we stub it."""
     from claude_ablation_lab import orchestrate

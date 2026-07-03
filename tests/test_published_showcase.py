@@ -85,3 +85,24 @@ def test_published_file_has_the_registered_showcase_shape() -> None:
     assert t4 == {(m, e, v) for m in models for e in efforts for v in variants}
     t3 = {(m, e, v) for t, m, e, v in by_config if t == "t3_verbatim_anchor"}
     assert t3 == {(m, e, "none") for m in models for e in efforts}
+
+
+@pytest.mark.unit
+def test_advise_on_published_ledger_excludes_the_vacuous_control() -> None:
+    # Golden `advise` over the committed showcase: the two saturated tasks are real
+    # opus→haiku downgrades; the without-skill control (all 0.0) is vacuous and MUST be
+    # flagged n/a and kept out of the overpay total — the review's shipped-data finding
+    # (a control variant was banking 37% of the headline). Pins the reconciled $0.17.
+    from claude_ablation_lab.analyze import cost_advisor, report
+
+    rows = {(a.task_id, a.variant): a for a in cost_advisor(report(_PUBLISHED), reflex="opus/max")}
+    with_skill = rows[("t4_demo_infra", ".demo-infra@with-skill")]
+    without_skill = rows[("t4_demo_infra", ".demo-infra@without-skill")]
+    t3 = rows[("t3_verbatim_anchor", "none")]
+
+    assert (with_skill.rec_model, with_skill.rec_effort) == ("haiku", "high")
+    assert with_skill.vacuous is False and with_skill.cost_saving == pytest.approx(0.1137, abs=2e-3)
+    assert t3.vacuous is False and t3.cost_saving == pytest.approx(0.0568, abs=2e-3)
+    assert without_skill.vacuous is True  # every config scores 0.0 → advisory only
+    real_total = sum(a.cost_saving for a in rows.values() if not a.vacuous)
+    assert real_total == pytest.approx(0.1705, abs=2e-3)  # only the two real rows
