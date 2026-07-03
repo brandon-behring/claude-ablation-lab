@@ -340,7 +340,7 @@ def test_slash_command_is_not_a_real_tool_name_regression_guard() -> None:
 
 @pytest.mark.unit
 def test_catalog_verified_version_is_pinned() -> None:
-    assert CATALOG_VERIFIED_CLAUDE_VERSION == "2.1.198"
+    assert CATALOG_VERIFIED_CLAUDE_VERSION == "2.1.200"
 
 
 @pytest.mark.unit
