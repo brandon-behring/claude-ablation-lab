@@ -1,0 +1,24 @@
+# books-validate pilot grid — the discriminating authoring probe.
+#   t5_books_validate        → variant `none` (single-turn, infra-agnostic)
+#   t6_books_validate_agent  → the .books-validate@v1 worktree (run examples/books-validate/setup.sh
+#                              first, from the REPO ROOT — the `.books-validate` string resolves
+#                              against the directory you invoke `ablation` from)
+#
+# The literal reflex under test is opus/max, so `max` effort IS in the grid this time — verified
+# live that `claude --effort` accepts low|high|max for every model, so no effort_support restriction
+# (whether `max` changes anything on haiku is itself the measurement). 3 models × 3 efforts × 3
+# epochs = 27 cells per task. Feed the resulting ledger to `ablation advise --reflex opus/max`.
+#
+# BUILD + DRY-RUN ONLY here; the model×effort run is a separate, explicit quota go.
+#
+# ⚠️  t5 (variant `none`) is the clean pilot — no tools, no answer-key leak. t6
+#     (`.books-validate@v1`) grants Bash and MUST NOT be run without an OS sandbox that blocks
+#     network egress + filesystem access outside the worktree (see tasks/t6_books_validate_agent.yaml):
+#     otherwise a cell can read/curl the answer key and saturate. For the pilot run t5 alone:
+#     `ablation run tasks/ grids/books-pilot.yaml --task t5_books_validate`.
+models: [haiku, sonnet, opus]
+efforts: [low, high, max]
+variants:
+  - none
+  - .books-validate@v1
+epochs: 3

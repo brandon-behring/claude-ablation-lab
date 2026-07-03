@@ -133,11 +133,96 @@ def _prepare_anchor(task: Task) -> Prepared:
     return Prepared(prompt=task.prompt, gold=task.gold)
 
 
+#: Fixture files the MODEL is allowed to see (the agent-visible whitelist). The answer key
+#: (expected.json, check.py) is excluded — it is grader-only. Hashing exactly these into gold means
+#: a change to task *material* changes spec_sha (→ re-run), parallel to the grader ``version``
+#: hashing the *rubric* (→ re-grade). Kept in sync with examples/books-validate/setup.sh.
+_BOOKS_VISIBLE = (
+    "chapter.mdx",
+    "labels.json",
+    "references.json",
+    "files.json",
+    "CLAUDE.md",
+    "validate_fixture.py",
+)
+
+
+def _books_fixture_sha(root: Path) -> str:
+    """16-hex hash of the agent-visible fixture files (missing file → its name only, still stable)."""
+    h = hashlib.sha256()
+    for name in _BOOKS_VISIBLE:
+        h.update(name.encode("utf-8"))
+        p = root / name
+        if p.is_file():
+            h.update(p.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _prepare_books_validate(task: Task) -> Prepared:
+    """t5/t6: fix a seeded-broken MDX chapter to pass the editorial conventions.
+
+    ``mode: single`` embeds the chapter + conventions + registries in the prompt and grades the
+    returned MDX; ``mode: agent`` gives a short instruction and grades the chapter edited in a
+    worktree (the fixture repo built by ``examples/books-validate/setup.sh``). The fixture root is
+    read from ``params.fixture_root`` (default: the packaged ``examples/books-validate``). Its
+    content hash goes into ``gold`` so a fixture edit changes ``spec_sha`` and never silently reuses
+    a stored run.
+    """
+    from claude_ablation_lab.graders.books_validate import DEFAULT_FIXTURE_ROOT
+
+    root = Path(os.path.expanduser(str(task.params.get("fixture_root", DEFAULT_FIXTURE_ROOT))))
+    gold = {"fixture_root": str(root), "fixture_sha": _books_fixture_sha(root)}
+    if task.mode == "agent":
+        needed = set(task.tools)
+        effective = tuple(t for t in HERMETIC_DISALLOWED_TOOLS if t not in needed)
+        return Prepared(
+            prompt=_books_agent_prompt(),
+            gold=gold,
+            artifact=str(task.params.get("artifact", "chapter.mdx")),
+            permission_mode=str(task.params.get("permission_mode", DEFAULT_AGENT_PERMISSION_MODE)),
+            disallowed_tools=effective,
+        )
+    return Prepared(prompt=_books_single_prompt(root), gold=gold)
+
+
+def _books_single_prompt(root: Path) -> str:
+    """Assemble the single-turn prompt: conventions + registries + the chapter, inline."""
+
+    def read(name: str) -> str:
+        return (root / name).read_text(encoding="utf-8")
+
+    return (
+        f"{read('CLAUDE.md')}\n\n"
+        "## Registries\n\n"
+        f"labels.json (valid XRef ids):\n{read('labels.json')}\n\n"
+        f"references.json (valid Cite keys):\n{read('references.json')}\n\n"
+        f"files.json (source files and their line counts):\n{read('files.json')}\n\n"
+        "## The chapter to correct\n\n"
+        "Apply every convention above to the chapter below. Preserve all prose and headings; change "
+        "only tags. Return the COMPLETE corrected chapter and nothing else — no diff, no "
+        "commentary.\n\n"
+        f"{read('chapter.mdx')}"
+    )
+
+
+def _books_agent_prompt() -> str:
+    """The agentic instruction — the chapter + rules live in the worktree, not the prompt."""
+    return (
+        "This project's chapter.mdx has editorial-convention violations. Read CLAUDE.md for the "
+        "conventions and labels.json / references.json / files.json for what is valid. Edit "
+        "chapter.mdx IN PLACE to satisfy every convention — do not create a copy or a new file, and "
+        "do not add, remove, or retitle headings. `python3 validate_fixture.py chapter.mdx` reports "
+        "structural errors but does not check every convention, so read the chapter carefully too. "
+        "Stop when the chapter satisfies every convention in CLAUDE.md."
+    )
+
+
 _PREPARERS = {
     "classification": _prepare_classification,
     "validator": _prepare_validator,
     "anchor": _prepare_anchor,
     "anchor_strict": _prepare_anchor,  # same static prep; only the grader differs
+    "books_validate": _prepare_books_validate,
 }
 
 

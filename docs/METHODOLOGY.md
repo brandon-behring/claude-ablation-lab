@@ -53,6 +53,61 @@ How the harness produces trustworthy numbers. Expanded as phases land.
 - Graders are tested against known input+gold before any number is trusted, and carry
   anti-gaming floors (anchor v2: ≥3-word **distinct** quotes only).
 
+## Discriminating tasks (books-validate: t5 / t6)
+
+The showcase tasks (t3/t4) are **saturated** — every config scores ~1.0, which proves the
+plumbing but cannot show where a cheaper model *loses* quality. `books-validate` is the first task
+built to **discriminate**: fix a seeded-broken MDX chapter against book-scaffold editorial
+conventions, on a ladder from mechanical (a malformed `<BookLink>`) through fuzzy near-miss ids to
+**semantic** items (the correct `<XRef>` is derivable only by reading which section the prose is
+about) and a required **citation addition** (prose names a source with no `<Cite>` tag). It ships in
+two shapes over one fixture: `t5` (single-turn, chapter in the prompt) and `t6` (agentic, the model
+edits the chapter in a `.books-validate@v1` worktree and can run the fidelity validator itself).
+
+Scoring is **anti-gaming by construction** (a pre-build adversarial design review drove every choice):
+- **Checklist, not violation-count.** Score = mean over N=15 required-correct items, so an empty or
+  tag-deleted submission scores **0** — it cannot beat an honest half-fix. The gradient is verified:
+  `empty/delete → 0.0`, `do-nothing → 0.5`, `fix-only-what-the-validator-sees → 0.77`, `full → 1.0`.
+- **Partial credit on the semantic rungs** ({0, ½, 1}: a valid-but-wrong-*family* id = ½). The
+  per-epoch score quantum is ½/15 = 1/30 ≈ 0.033, but `advise` compares config *means over 3 epochs*,
+  whose lattice is ½/45 = 1/90 ≈ 0.011 — below the 0.02 margin, so a config one-half-credit behind on
+  a single epoch is still "within margin," while a config that reliably misses an item (mean ≥ 0.033)
+  is correctly excluded. A pure-binary ladder (quantum 1/15 = 0.067) would degenerate "within margin"
+  into "exact tie" and read config noise as "opus earns its keep."
+- **Census is excess-only with anti-spray headroom** (max = gold-count + 2, floored at ≥1) — spraying
+  ids fails the count, but a single benign extra tag doesn't, an omission is charged once by its own
+  item, and an empty doc earns no free census credit.
+- **Not every item discriminates — some are gates.** The 2 census + 3 tripwire items score ~1.0 for
+  any non-adversarial submission; they exist to catch *gaming* (spray) and *regression* (breaking an
+  already-correct element), not to separate strong from weak models. Discrimination lives in the 9
+  mechanical/fuzzy/semantic/addition rungs; the ladder is honestly "9 discriminating + 6 gate" of 15.
+- **Anti-gaming hardening (a 3-voice pre-commit review, findings confirmed by running the checker):**
+  tags inside comments or code fences are stripped before scoring (a commented-out chapter scored
+  15/15 before this); a duplicated prose anchor is rejected (a preamble carrying a correct tag can't
+  farm an item while the body stays broken); a `<CodeRef>` must cite an in-range line on the *expected*
+  file (deleting the line, or repointing to another valid file, no longer passes); brace-quoted values
+  (`id={"x"}`) are normalized so a correct value isn't mis-scored for its delimiter style.
+- **Agentic (t6) confidentiality is NOT enforced — sandbox required.** t6 grants Bash, and the
+  grade-time answer key lives in the repo and its public mirror, so an un-sandboxed cell can `curl`/
+  `cat` the gold and saturate the task (git-worktree write-isolation is not read-confidentiality).
+  **t5 (no tools) is the clean pilot;** run t6 only under an OS sandbox that blocks egress + parent-FS
+  access, or after the answer key is moved out of the checkout.
+- **The answer key never reaches the model.** `expected.json`/`check.py` are grader-only; the
+  worktree and prompt get a *fidelity* validator (`validate_fixture.py`, a faithful `validate.mjs`
+  subset) that is blind to semantics — the gap between "passes the validator" and "understands the
+  chapter" is the discrimination signal.
+- **The verdict is trusted only from the final `CHECK PASSED`/`FAILED` line, cross-checked against
+  the exit code** (no echo-injection); degenerate outputs (oversize, NUL) score a deterministic 0.0,
+  never `grader_error` (which would exclude them from the mean). A fixture edit changes both `spec_sha`
+  (via a content hash in `gold`) and the grader `version` (via a rubric hash) — no silent metric-mixing.
+- **Fairness gate:** before any quota, independent blind solvers attempt the fixture; an item on which
+  competent solvers disagree measures grader ambiguity, not model quality, and is rewritten. Two such
+  items (self-referential XRefs a figure could equally satisfy) were caught and fixed exactly this way.
+
+The build ships **run-pending**: `t5`/`t6` and `grids/books-pilot.yaml` (3 models × {low, high, max}
+× 3 epochs = 27 cells each) are dry-run-verified; the model×effort run is a separate, explicit quota
+go whose ledger feeds `ablation advise --reflex opus/max`.
+
 ## Showcase pre-registration (2026-07-02, committed before any sweep cell ran)
 
 The public showcase (`grids/showcase.yaml`: 54 cells; headline = the t4 skill A/B over 6

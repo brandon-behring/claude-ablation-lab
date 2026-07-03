@@ -128,6 +128,29 @@ To test **your own** infra change instead, point a grid's `variants` at two refs
 (`yourrepo@main` vs `yourrepo@candidate` — the `grids/v1.yaml` pattern) and `compare` them; the
 same pre-registered verdict semantics apply.
 
+## Beyond saturation — the discriminating pilot (`books-validate`)
+
+The showcase tasks are **saturated** (every config scores ~1.0), so they prove the method and the
+overpay-on-*easy*-work finding, but not whether the opus/max reflex earns its keep on *hard* work.
+[`examples/books-validate/`](examples/books-validate/README.md) is the first task built to
+**discriminate**: fix a seeded-broken MDX chapter against editorial conventions, on a ladder from
+mechanical fixes through semantic cross-reference resolution to a required citation addition. It
+ships in two shapes — `t5_books_validate` (single-turn) and `t6_books_validate_agent` (agentic
+worktree) — with an anti-gaming checklist grader (verified gradient: `empty → 0.0`, `do-nothing →
+0.5`, `pass-the-validator-only → 0.77`, `full understanding → 1.0`) and a blind-solve fairness pass.
+Build + dry-run are complete; the model×effort run is a separate quota go whose ledger feeds
+`ablation advise --reflex opus/max`:
+
+```bash
+ablation run tasks/ grids/books-pilot.yaml --task t5_books_validate --dry-run   # 27-cell preview
+```
+
+**`t5` is the clean pilot** (single-turn, no tools, no answer-key leak). The agentic `t6` is
+shape-complete but **must not be run without an OS sandbox** (blocking network egress + filesystem
+access outside its worktree): it grants Bash, and the grade-time answer key lives in this repo and
+its public mirror, so an un-sandboxed cell could `curl`/`cat` the gold and saturate the task — a
+3-voice review finding, documented in `tasks/t6_books_validate_agent.yaml`.
+
 ## Status
 
 Alpha — **build phases 0–6 complete and the public showcase shipped** (the live 54-cell run above, sanitized ledger + figures committed). Runner + worktree isolation with hermetic tool-minimal cells, 4 graders (run/grade decoupled), grid + JSONL ledger + orchestrator (resumable, provenance-stamped, back-off/halt + an infra circuit breaker), DuckDB `report`/`compare` (exact sign-flip verdicts; honest unparseable accounting), `estimate`, and `ablation plot` figures. A full-repo 3-lens ship-review (correctness · methodology · cold-read) is recorded in [`docs/design/2026-07-01_comprehensive-review.md`](docs/design/2026-07-01_comprehensive-review.md), and the pre-sweep checkpoint review in [`docs/design/2026-07-02_checkpoint-review.md`](docs/design/2026-07-02_checkpoint-review.md). The broader v1 sweep (T1/T2) is user-driven — it spends real rate-limit headroom. See `CLAUDE.md` for conventions, [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how the numbers stay honest, and per-phase reviews in [`docs/design/`](docs/design/).

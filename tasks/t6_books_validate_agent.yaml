@@ -1,0 +1,28 @@
+# T6 — books authoring, agentic (the DISCRIMINATING task, faithful shape).
+# Same fixture as t5, but the model works IN a `.books-validate@v1` worktree (built by
+# examples/books-validate/setup.sh): it reads CLAUDE.md + registries, edits chapter.mdx in place,
+# and can run `python3 validate_fixture.py chapter.mdx` itself and iterate. The edited chapter is
+# read back (orchestrate._capture_output) and graded by check.py from the CANONICAL
+# examples/books-validate/ (never the worktree — the WORKTREE ships only the whitelist).
+#
+# ⚠️  DO NOT RUN WITHOUT A SANDBOX (3-voice review finding, confirmed live). The worktree does not
+#     contain the answer key, but this task grants Bash, and the grade-time answer key
+#     (examples/books-validate/expected.json + tests/fixtures/books_validate_gold.mdx) lives in the
+#     harness repo and in the PUBLIC GitHub mirror. A Bash cell can `cat ../examples/...` or `curl`
+#     the public repo and copy the gold → every config scores 15/15 and t6 saturates (useless, like
+#     t3/t4). The write-isolation of git worktrees does NOT provide read-confidentiality. Run t6
+#     ONLY in an environment that blocks network egress AND filesystem access outside the worktree
+#     (or after the answer key is moved out of the checkout/public repo). t5_books_validate has no
+#     tools and no leak — it is the clean pilot; run it first.
+id: t6_books_validate_agent
+domain: authoring
+grader: books_validate
+mode: agent
+infra_repo: .books-validate
+timeout_s: 600
+tags: [authoring, agentic, agent-loop, discriminating, mdx]
+prompt: ""
+params:
+  artifact: chapter.mdx
+# Hermetic-minus-declared (D6): the agent needs to read, edit, and run the fidelity validator.
+tools: [Read, Edit, Write, Bash]

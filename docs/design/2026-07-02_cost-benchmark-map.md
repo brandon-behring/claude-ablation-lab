@@ -1,5 +1,12 @@
 # Cost-benchmark map — extending the overpay verdict to *discriminating* work
 
+**Status: BUILT — run-pending (updated 2026-07-03).** The pilot task below shipped as `t5_books_validate`
+(single-turn) + `t6_books_validate_agent` (agentic) with the hardened checklist grader, the
+`examples/books-validate/` fixture, `grids/books-pilot.yaml`, an adversarial test battery, and a
+blind-solve fairness pass (two ambiguous items caught + fixed). CI-green, dry-run-verified at 27 cells
+each; the model×effort run is a separate explicit quota go. Full rationale in `docs/METHODOLOGY.md`
+(Discriminating tasks) and the session plan. Original design notes preserved below.
+
 **Status: design + grounding (2026-07-02).** Phase 1 (`ablation advise`) shipped the cost verdict and,
 on the committed showcase ledger, a real finding: **opus→haiku is 11–15× cheaper for +0.000 quality**
 on `t3`/`t4`. But those tasks are *saturated* — every config already scores 1.000 — so they prove the

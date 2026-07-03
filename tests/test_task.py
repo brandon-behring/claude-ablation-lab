@@ -24,17 +24,21 @@ def test_load_all_seed_tasks() -> None:
         "t2_research_plan",
         "t3_verbatim_anchor",
         "t4_demo_infra",
+        "t5_books_validate",
+        "t6_books_validate_agent",
     }
     assert tasks["t2_research_plan"].mode == "agent"
     assert tasks["t1_prompt_injection"].infra_repo is None
     assert tasks["t4_demo_infra"].infra_repo is not None  # infra-sensitive (the demo A/B)
+    assert tasks["t5_books_validate"].mode == "single"  # the discriminating authoring probe
+    assert tasks["t6_books_validate_agent"].tools == ("Read", "Edit", "Write", "Bash")
     # D6: T2 declares exactly what its skill needs (matches its own SKILL.md
     # allowed-tools frontmatter — see the task YAML's comment for the citation).
     assert tasks["t2_research_plan"].tools == ("Read", "Write", "Bash")
     assert tasks["t3_verbatim_anchor"].tools == ()  # single-turn tasks declare none
     for task in tasks.values():
         assert isinstance(task, Task)
-        assert task.grader in {"classification", "validator", "anchor"}
+        assert task.grader in {"classification", "validator", "anchor", "books_validate"}
 
 
 @pytest.mark.unit
