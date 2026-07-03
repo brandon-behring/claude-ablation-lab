@@ -104,9 +104,12 @@ Scoring is **anti-gaming by construction** (a pre-build adversarial design revie
   competent solvers disagree measures grader ambiguity, not model quality, and is rewritten. Two such
   items (self-referential XRefs a figure could equally satisfy) were caught and fixed exactly this way.
 
-The build ships **run-pending**: `t5`/`t6` and `grids/books-pilot.yaml` (3 models × {low, high, max}
-× 3 epochs = 27 cells each) are dry-run-verified; the model×effort run is a separate, explicit quota
-go whose ledger feeds `ablation advise --reflex opus/max`.
+**Run done (t5, 2026-07-03):** the 27-cell `t5` sweep (3 models × {low, high, max} × 3 epochs) fed
+`ablation advise --reflex opus/max`, and the discriminating task did its job. It **separates** (haiku
+~0.10 below the field — not saturated) yet the opus/max reflex **does not earn its keep**: opus/max
+(0.978) ties sonnet/high (0.978) to four decimals at 3.6× the cost and ~200s more latency, and `max`
+effort was waste on every model. So the "opus earns it on hard authoring" hypothesis is tested and
+falsified on this probe. (`t6` stays sandbox-gated — not run.)
 
 ## Showcase pre-registration (2026-07-02, committed before any sweep cell ran)
 

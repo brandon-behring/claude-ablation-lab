@@ -138,11 +138,18 @@ mechanical fixes through semantic cross-reference resolution to a required citat
 ships in two shapes — `t5_books_validate` (single-turn) and `t6_books_validate_agent` (agentic
 worktree) — with an anti-gaming checklist grader (verified gradient: `empty → 0.0`, `do-nothing →
 0.5`, `pass-the-validator-only → 0.77`, `full understanding → 1.0`) and a blind-solve fairness pass.
-Build + dry-run are complete; the model×effort run is a separate quota go whose ledger feeds
-`ablation advise --reflex opus/max`:
+**Result (t5 run, 2026-07-03, 27/27 cells):** the task discriminates (haiku ~0.10 below the field —
+genuinely not saturated), but the opus/max reflex **does not earn its keep** — opus/max (0.978) ties
+`sonnet/high` (0.978) to four decimals while costing **3.6× more** and running **~200s slower** per
+run, so `ablation advise --reflex opus/max` recommends `sonnet/high`. `max` effort was waste on every
+model. The one untested row of the spend-audit decision rule ("opus earns it on open-ended authoring")
+is thus tested and falsified. Reproduce:
 
 ```bash
 ablation run tasks/ grids/books-pilot.yaml --task t5_books_validate --dry-run   # 27-cell preview
+ablation run tasks/ grids/books-pilot.yaml --task t5_books_validate \
+  --ledger results/books-pilot.jsonl                                            # the quota run
+ablation advise results/books-pilot.jsonl --reflex opus/max                     # the verdict
 ```
 
 **`t5` is the clean pilot** (single-turn, no tools, no answer-key leak). The agentic `t6` is
