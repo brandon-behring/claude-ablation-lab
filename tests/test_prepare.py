@@ -156,6 +156,67 @@ def test_spec_sha_is_stable_and_changes_with_gold() -> None:
     assert same_a != different  # a gold change changes the fingerprint
 
 
+def _books_task(mode: str, fixture_root: str, **params) -> Task:
+    return Task(
+        id=f"t_books_{mode}",
+        domain="authoring",
+        grader="books_validate",
+        mode=mode,  # type: ignore[arg-type]
+        params={"fixture_root": fixture_root, **params},
+        tools=("Read", "Edit", "Write", "Bash") if mode == "agent" else (),
+    )
+
+
+@pytest.mark.unit
+def test_prepare_books_single_embeds_fixture_and_sets_gold() -> None:
+    from claude_ablation_lab.graders.books_validate import DEFAULT_FIXTURE_ROOT
+
+    prep = prepare_task(_books_task("single", str(DEFAULT_FIXTURE_ROOT)))
+    assert "Resampling Methods" in prep.prompt  # the chapter is inline
+    assert "Editorial conventions" in prep.prompt  # the rules are inline
+    assert prep.artifact is None and prep.disallowed_tools is None  # single-turn, hermetic
+    assert set(prep.gold) == {"fixture_root", "fixture_sha"}
+
+
+@pytest.mark.unit
+def test_prepare_books_agent_sets_artifact_tools_and_permission() -> None:
+    from claude_ablation_lab.graders.books_validate import DEFAULT_FIXTURE_ROOT
+
+    prep = prepare_task(_books_task("agent", str(DEFAULT_FIXTURE_ROOT)))
+    assert prep.artifact == "chapter.mdx"
+    assert prep.permission_mode == DEFAULT_AGENT_PERMISSION_MODE
+    assert prep.disallowed_tools is not None and "Bash" not in prep.disallowed_tools
+    assert (
+        "Resampling Methods" not in prep.prompt
+    )  # the chapter lives in the worktree, not the prompt
+
+
+@pytest.mark.unit
+def test_prepare_books_fixture_edit_changes_spec_sha(tmp_path) -> None:
+    # A fixture-material edit must change spec_sha so a stored run is never silently reused for a
+    # different chapter — for BOTH modes (single embeds it in the prompt; agent carries fixture_sha).
+    from claude_ablation_lab.graders.books_validate import DEFAULT_FIXTURE_ROOT
+
+    for name in (
+        "chapter.mdx",
+        "labels.json",
+        "references.json",
+        "files.json",
+        "CLAUDE.md",
+        "validate_fixture.py",
+    ):
+        (tmp_path / name).write_text((DEFAULT_FIXTURE_ROOT / name).read_text(), encoding="utf-8")
+
+    for mode in ("single", "agent"):
+        before = prepare_task(_books_task(mode, str(tmp_path))).spec_sha
+        chapter = tmp_path / "chapter.mdx"
+        original = chapter.read_text()
+        chapter.write_text(original + "\n<!-- edit -->\n", encoding="utf-8")
+        after = prepare_task(_books_task(mode, str(tmp_path))).spec_sha
+        chapter.write_text(original, encoding="utf-8")  # restore for the next mode
+        assert before != after, mode
+
+
 @pytest.mark.unit
 def test_spec_sha_changes_with_declared_tools() -> None:
     def validator(tools: tuple[str, ...]) -> Task:

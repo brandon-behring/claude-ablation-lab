@@ -1,0 +1,16 @@
+{
+  "efron1979": {"author": "Efron, B.", "year": 1979, "title": "Bootstrap methods: another look at the jackknife"},
+  "efron1981": {"author": "Efron, B.", "year": 1981, "title": "Nonparametric estimates of standard error"},
+  "efron1987": {"author": "Efron, B.", "year": 1987, "title": "Better bootstrap confidence intervals"},
+  "efrontib1993": {"author": "Efron, B. and Tibshirani, R.", "year": 1993, "title": "An Introduction to the Bootstrap"},
+  "quenouille1949": {"author": "Quenouille, M. H.", "year": 1949, "title": "Approximate tests of correlation in time-series"},
+  "tukey1958": {"author": "Tukey, J. W.", "year": 1958, "title": "Bias and confidence in not-quite large samples"},
+  "davisonhinkley1997": {"author": "Davison, A. C. and Hinkley, D. V.", "year": 1997, "title": "Bootstrap Methods and their Application"},
+  "hall1992": {"author": "Hall, P.", "year": 1992, "title": "The Bootstrap and Edgeworth Expansion"},
+  "politis1994": {"author": "Politis, D. N. and Romano, J. P.", "year": 1994, "title": "The stationary bootstrap"},
+  "singh1981": {"author": "Singh, K.", "year": 1981, "title": "On the asymptotic accuracy of Efron's bootstrap"},
+  "bickelfreedman1981": {"author": "Bickel, P. J. and Freedman, D. A.", "year": 1981, "title": "Some asymptotic theory for the bootstrap"},
+  "diciccioefron1996": {"author": "DiCiccio, T. J. and Efron, B.", "year": 1996, "title": "Bootstrap confidence intervals"},
+  "mammen1993": {"author": "Mammen, E.", "year": 1993, "title": "Bootstrap and wild bootstrap for high dimensional linear models"},
+  "shao1995": {"author": "Shao, J. and Tu, D.", "year": 1995, "title": "The Jackknife and Bootstrap"}
+}

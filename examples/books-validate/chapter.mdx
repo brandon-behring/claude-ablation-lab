@@ -1,0 +1,81 @@
+---
+title: Resampling Methods
+slug: resampling-methods
+---
+
+## Why Resample?
+
+Classical inference leans on closed-form sampling distributions that exist only
+for a handful of statistics under strong assumptions. Resampling replaces those
+assumptions with computation: we treat the sample as a stand-in for the
+population and re-draw from it. For onboarding, <BookLink book="handbook">the day-to-day workflow</BookLink> is the gentler place to begin before this chapter.
+
+The plug-in principle underlies everything here: to estimate a feature of a
+distribution, compute that same feature of the empirical distribution. Its
+validity is guaranteed by the central limit theorem <XRef id="thm-glivenko-cantelli"/> in
+the regimes where the statistic is asymptotically normal.
+
+## The Nonparametric Bootstrap
+
+The bootstrap was introduced by Efron in 1979 <Cite key="efron1978"/> as a
+computational stand-in for the delta method. A single bootstrap replicate draws
+n observations with replacement from the original n; the resampling loop in
+<CodeRef path="src/resample.py" line={200} lineEnd={240}/> shows the inner draw.
+
+Computing the statistic across many replicates yields an empirical sampling
+distribution. The percentile interval reads its 2.5th and 97.5th quantiles
+directly. The standard reference text is <Cite key="efrontib1993"/>, which
+remains the clearest introduction for practitioners.
+
+Because the empirical distribution function converges uniformly to the truth
+<XRef id="thm-glivenko-cantelli"/>, the resampled quantiles converge to the
+population quantiles as n grows.
+
+## Bias Correction
+
+A plug-in estimator is often biased. The bootstrap estimates that bias by
+comparing the mean of the replicate statistics to the statistic on the full
+sample. This machinery builds directly on the ordinary nonparametric bootstrap of
+<XRef id="sec-bootstrap-basic"/>, adding one layer of correction.
+
+The corrected estimate subtracts the bootstrap bias estimate from the original.
+For the percentile helper in <CodeRef path="src/intervals.py" line={12} lineEnd={30}/>
+we apply the same shift before reading the quantiles.
+
+## BCa Intervals
+
+The percentile interval is transformation-respecting but not second-order
+accurate. The bias-corrected and accelerated interval refines <XRef id="sec-bootstrap-bca"/>
+by adding an acceleration constant estimated from the influence function.
+
+The accelerated variant is due to Efron (1987), who showed it achieves
+second-order accuracy under smoothness. When correcting for median bias, discussed under
+<XRef id="sec-bootstrap-basics"/>, the acceleration term vanishes and BCa reduces
+to the simpler bias-corrected interval.
+
+## The Jackknife
+
+The jackknife predates the bootstrap. It estimates variance by leaving out one
+observation at a time and measuring how much the statistic moves. Each
+leave-one-out replicate is deterministic, so the jackknife needs no random
+number generator at all.
+
+The jackknife is a linear approximation to the bootstrap and can fail badly for
+non-smooth statistics such as the median.
+
+## Permutation Tests
+
+Unlike the jackknife discussed in <XRef id="sec-cross-validation"/>, which removes
+one observation at a time, a permutation test resamples labels without replacement
+to test a hypothesis. The core idea is shuffling labels to build a null distribution
+against which the observed statistic is compared.
+
+Permutation p-values are exact under the null of exchangeability, which is why
+they are preferred when that assumption is defensible.
+
+## When Resampling Fails
+
+Every method here assumes the sample captures the population's tail behavior, and
+the permutation test described in <XRef id="sec-jackknife"/> further leans on
+exchangeability. Under heavy tails or strong dependence the resampled distribution
+misleads, and no amount of computation repairs a sample that never saw the extremes.

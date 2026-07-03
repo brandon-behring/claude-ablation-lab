@@ -30,7 +30,13 @@ def test_unknown_grader_raises() -> None:
 
 @pytest.mark.unit
 def test_grader_names_cover_seed_graders_and_anchor_strict() -> None:
-    assert set(GRADER_NAMES) == {"classification", "validator", "anchor", "anchor_strict"}
+    assert set(GRADER_NAMES) == {
+        "classification",
+        "validator",
+        "anchor",
+        "anchor_strict",
+        "books_validate",
+    }
 
 
 @pytest.mark.unit

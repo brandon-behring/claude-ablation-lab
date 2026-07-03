@@ -15,11 +15,11 @@ if TYPE_CHECKING:
 
 __all__ = ["get_grader", "GRADER_NAMES"]
 
-GRADER_NAMES = ("classification", "validator", "anchor", "anchor_strict")
+GRADER_NAMES = ("classification", "validator", "anchor", "anchor_strict", "books_validate")
 
 
 def get_grader(name: str) -> Grader:
-    """Return a grader instance by name (``classification`` / ``validator`` / ``anchor``[``_strict``])."""
+    """Return a grader instance by name (``classification`` / ``validator`` / ``anchor``[``_strict``] / ``books_validate``)."""
     if name in ("anchor", "anchor_strict"):
         from claude_ablation_lab.graders.anchor import AnchorGrader
 
@@ -32,4 +32,8 @@ def get_grader(name: str) -> Grader:
         from claude_ablation_lab.graders.classification import ClassificationGrader
 
         return ClassificationGrader()
+    if name == "books_validate":
+        from claude_ablation_lab.graders.books_validate import BooksValidateGrader
+
+        return BooksValidateGrader()
     raise ValueError(f"unknown grader: {name!r} (known: {', '.join(GRADER_NAMES)})")
