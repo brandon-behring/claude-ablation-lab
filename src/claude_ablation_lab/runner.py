@@ -144,15 +144,15 @@ KNOWN_BUILTIN_TOOLS: tuple[str, ...] = (
 #: bump may have added/renamed a tool the catalog doesn't know about — fail closed,
 #: don't silently trust a stale list) unless ``--allow-unverified-tools`` is passed.
 #:
-#: Re-verified 2026-07-03 against 2.1.200. The CLI auto-updates ~daily; the recent
-#: patch bumps 2.1.198→199→200 were each re-checked two independent ways, all clean —
+#: Re-verified through 2026-07-04 against 2.1.201. The CLI auto-updates ~daily; the
+#: patch bumps 2.1.198→199→200→201 were each re-checked two independent ways, all clean —
 #: no built-in added or renamed: (1) a live ``system/init`` event enumerates only names
 #: already in ``KNOWN_BUILTIN_TOOLS``; (2) the upstream CHANGELOG is bugfix-only (its
 #: tool-name lines were an existing-tool ``SendMessage`` routing fix and an
 #: ``AskUserQuestion`` dialog-behavior change — neither a new tool). So the deny list
 #: still covers the full escape surface. When a patch bump trips this gate mid-run,
 #: repeat the two-source probe and bump — do NOT reach for ``--allow-unverified-tools``.
-CATALOG_VERIFIED_CLAUDE_VERSION = "2.1.200"
+CATALOG_VERIFIED_CLAUDE_VERSION = "2.1.201"
 
 #: Tools kept out of every cell's deny list — not the escape surface, but mechanisms
 #: the harness itself relies on. ``Skill`` is the treatment mechanism under test.
