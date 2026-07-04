@@ -1,11 +1,16 @@
 # Cost-benchmark map — extending the overpay verdict to *discriminating* work
 
-**Status: BUILT — run-pending (updated 2026-07-03).** The pilot task below shipped as `t5_books_validate`
+**Status: BUILT + RUN DONE (t5, 2026-07-03).** The pilot task below shipped as `t5_books_validate`
 (single-turn) + `t6_books_validate_agent` (agentic) with the hardened checklist grader, the
 `examples/books-validate/` fixture, `grids/books-pilot.yaml`, an adversarial test battery, and a
-blind-solve fairness pass (two ambiguous items caught + fixed). CI-green, dry-run-verified at 27 cells
-each; the model×effort run is a separate explicit quota go. Full rationale in `docs/METHODOLOGY.md`
-(Discriminating tasks) and the session plan. Original design notes preserved below.
+blind-solve fairness pass (two ambiguous items caught + fixed). **The t5 quota run (27/27 cells)
+settled the question: the task discriminates — haiku sits ~0.10 below the field, so it is genuinely
+not saturated — but the opus/max reflex does NOT earn its keep. opus/max (0.978) ties sonnet/high
+(0.978) to four decimals while costing 3.6× more and running ~200s slower per run; `advise` → use
+sonnet/high. Max effort was waste on every model (sonnet/max == sonnet/high, opus/max == opus/low,
+haiku/max is haiku's worst tier).** (t6 stays sandbox-gated — not run.) Full rationale in
+`docs/METHODOLOGY.md` (Discriminating tasks) and `docs/design/2026-07-03_spend-audit.md`. Original
+design notes preserved below.
 
 **Status: design + grounding (2026-07-02).** Phase 1 (`ablation advise`) shipped the cost verdict and,
 on the committed showcase ledger, a real finding: **opus→haiku is 11–15× cheaper for +0.000 quality**
@@ -27,7 +32,10 @@ margin." We just have no such task yet. The map's job: add one, cheaply, and fee
 | 2 | Engineering | make a seeded-broken test green (`book-scaffold tests/*.test.mjs` or a pytest holdout) | exit-code / TAP-parse | *plausible-high* — classic SWE gradient | MED | reuses the same exit-code grader as #1 → the consolidation trigger |
 | 3 | Editorial verification | classify which claims need a `<Tag kind="official">` source URL | existing `classification` | depends on label difficulty | LOW | cheapest; single-turn, no new grader |
 
-Separability is honestly **unknown** for every row until a quota run — that is the whole point of building one.
+Separability was honestly **unknown** for every row until a quota run — that was the whole point of building one.
+**Row 1 has now run (t5):** it *does* separate (haiku ~0.10 below the field), confirming the instrument measures
+real quality on hard authoring — but the separation is *haiku-vs-the-rest*, not *opus-above-sonnet*: sonnet/high,
+sonnet/max, opus/low and opus/max all tie at 0.978. Rows 2–3 remain unrun.
 
 ## Grounding that settled the pilot design
 

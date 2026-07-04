@@ -34,13 +34,25 @@ The confidence axis is **task shape, not task importance**. Flip the default fro
 |---|---|---|---|
 | Extraction / classification / verbatim / format-bound (a checkable answer exists) | **haiku** | low | **Tested** — Phase-1: haiku = opus quality at 11–15× less cost; low=high on saturated work |
 | Mechanical edits, refactor-with-tests, lookups, summarize, boilerplate | **sonnet** | medium | *Strongly implied* — low downside (tests/checks catch regressions) |
-| Open-ended authoring with voice, novel design, hard debugging, adversarial review | **opus** | high | **Untested** — opus *may* earn it here; this is assumption, and the one slice `books-validate` would verify |
-| "Reach for `max` effort" | — | treat like the opus reflex | **No tested case** where max earned its keep; default med/high, reserve max for genuinely hard reasoning |
+| Open-ended authoring with voice, novel design, hard debugging, adversarial review | **sonnet** | high | **Tested (t5, 2026-07-03) — reflex falsified for authoring.** On the `books-validate` hard-authoring probe, opus/max (0.978) *tied* sonnet/high (0.978) to four decimals at 3.6× cost + ~200s latency; opus did not separate from sonnet, only haiku fell behind. (Novel design / hard debugging still unmeasured — but the specific "opus authoring" assumption that motivated this row is disproven on authoring.) |
+| "Reach for `max` effort" | — | **avoid** | **Tested (t5) — waste.** sonnet/max == sonnet/high and opus/max == opus/low (both to the decimal), haiku/max is haiku's *worst* tier. Zero cases where max beat high/low; default med/high. |
 
-**One line:** *start every task on sonnet/medium; escalate to opus/high only when the task is genuinely open-ended-hard or sonnet visibly underperforms.* Because opus is 96–99% of current spend, flipping the default likely captures most of the savings on its own.
+**One line:** *start every task on sonnet — open-ended authoring included — and escalate to opus only when sonnet visibly underperforms, not by task-hardness alone.* The `books-validate` run removed the last "maybe opus earns it on hard authoring" hedge: it didn't. Because opus is 96–99% of current spend, flipping the default likely captures most of the savings on its own.
+
+## The depth-probe result (t5 `books-validate`, 2026-07-03)
+
+The bottom-row assumption finally got its test — a 27-cell sweep (3 models × {low, high, max} × 3 epochs) fixing a seeded-broken MDX chapter that an anti-gaming checklist grader scores 0→1. The task **discriminates** (haiku lands ~0.10 below the field — genuinely not saturated), but within the field opus does **not** separate from sonnet:
+
+| model | low | high | max |
+|---|---|---|---|
+| haiku | 0.878 | 0.867 | 0.822 |
+| sonnet | 0.956 | **0.978** | 0.978 |
+| opus | 0.978 | 0.878 | **0.978** |
+
+**opus/max = sonnet/high = 0.9778** — identical epoch scores `[0.933, 1.0, 1.0]`, Δ +0.0000. `ablation advise --reflex opus/max` → **use `sonnet/high`: same quality, 3.6× cheaper, ~200s faster per run.** `max` effort was pure waste on every model (the whole top tier — sonnet/high, sonnet/max, opus/low, opus/max — ties at 0.978). And the reflex tier is the one that hit the weekly session cap mid-run before it was resumed: the priciest config exhausted quota for *zero* quality gain over one 3.6× cheaper. (`t6` agentic shape stays sandbox-gated — not run.)
 
 ## What this does to the roadmap
 
 - **The audit is the deliverable, not a new benchmark.** The highest-leverage action is behavioral (the rule above), not more measurement.
-- **`books-validate` stays designed and parked** (`2026-07-02_cost-benchmark-map.md` + the session plan): it's the *depth*-probe for the untested bottom row, worth building on a real trigger, but it addresses an 8% slice — not the headline.
+- **`books-validate` was built *and* run** (2026-07-03; `2026-07-02_cost-benchmark-map.md`): the depth-probe for the (formerly) untested bottom row is done, and it *falsified* the opus-earns-it-on-hard-authoring assumption — opus/max tied sonnet/high at 3.6× the cost (see the result section above). Still only an 8% slice, but it's the one slice that turns the bottom row from assumption into measurement.
 - **A broader cross-work "downgrade audit"** is blocked by the fact that the top task types (guides, job-apps, interview-prep) aren't cheaply auto-gradable — which is *why* the synthetic fixture exists. Scope separately if the rule alone proves insufficient.
