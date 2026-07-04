@@ -62,9 +62,37 @@ def test_empty_output_is_unparseable() -> None:
 
 
 @pytest.mark.unit
-def test_json_object_without_answer_key_is_unparseable() -> None:
-    # A dict carrying no answer field is a format miss, not a wrong answer.
-    assert val('{"why": "something", "note": "x"}').status == "unparseable"
+def test_json_object_without_answer_key_falls_back_and_scores_zero() -> None:
+    # A dict with no answer field is not an answer; robust extraction falls back to the
+    # whole output, which does not match -> a scored-0 wrong answer (included in the
+    # mean), not an excluded unparseable.
+    s = val('{"why": "something", "note": "x"}')
+    assert s.value == 0.0 and s.status == "ok"
+
+
+@pytest.mark.unit
+def test_spurious_array_in_prose_does_not_shadow_the_answer() -> None:
+    # The v1 bug it fixes: a JSON array like [10, 20, 30] in the reasoning was parsed
+    # first and shadowed the real answer object, mis-scoring a correct verbose response
+    # as 0 (a bias against exactly the max-effort configs under test).
+    out = 'For [10, 20, 30] the median is 20.\n```json\n{"answer": "rank = q * n"}\n```'
+    assert val(out).value == 1.0
+
+
+@pytest.mark.unit
+def test_last_answer_object_wins_over_an_earlier_example() -> None:
+    out = '{"answer": "lo = int(rank)"} ... actually no:\n{"answer": "rank = q * n"}'
+    assert val(out).value == 1.0
+
+
+@pytest.mark.unit
+def test_a_single_code_fence_is_the_answer() -> None:
+    assert val("The buggy line is:\n```python\nrank = q * n\n```").value == 1.0
+
+
+@pytest.mark.unit
+def test_answer_delimiter_line_wins() -> None:
+    assert val("Reasoning about type-7 interpolation...\nANSWER: rank = q * n").value == 1.0
 
 
 @pytest.mark.unit
@@ -125,4 +153,4 @@ def test_numeric_non_numeric_answer_scores_zero() -> None:
 
 @pytest.mark.unit
 def test_version_is_stable() -> None:
-    assert G.version == "exact-match-v1"
+    assert G.version == "exact-match-v2"

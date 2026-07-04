@@ -15,35 +15,44 @@ Gold contract::
       rel_tol: 1e-9                 # optional numeric tolerances (math.isclose)
       abs_tol: 0.0
 
-The answer is read from JSON (``{"answer": ...}`` / ``result`` / ``value`` / ``line``),
-falling back to the whole stripped output when the model emits the bare answer.
-String comparison is **whitespace-insensitive** (all whitespace removed) so that
-re-typing a code line with different operator spacing or indentation is not
-penalised — only the tokens matter, which is the honest bar for "did you name the
-right line". It is equality, not containment: dumping the whole function does NOT
-match (that would let a model spray every line and score 1.0). Numeric mode parses
-the first number out of the answer and compares with :func:`math.isclose`.
+**Answer extraction is deliberately robust** (v2), because verbose / max-effort
+responses reason in prose and are otherwise scored 0 even when they contain the right
+answer — a bias against exactly the configs under test. In priority order the answer
+is read from: (1) an explicit ``ANSWER: <x>`` delimiter line (the contract to prefer);
+(2) the LAST JSON object carrying an answer key — scanning every ``{...}`` so a
+spurious array like ``[10, 20, 30]`` in the reasoning cannot shadow the real answer
+object (the v1 bug); (3) a lone ```` ``` ````-fenced code block; (4) the whole stripped
+output. Comparison is **whitespace-insensitive** (all whitespace removed) so re-typing
+a code line with different spacing/indentation is not penalised. It is equality, not
+containment: dumping the whole function does NOT match. Numeric mode parses the first
+number and compares with :func:`math.isclose`.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from claude_ablation_lab.grade import Score
-from claude_ablation_lab.graders._parse import lenient_json
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 __all__ = ["ExactMatchGrader"]
 
-#: Keys under which a model may return its answer (first present wins).
+_DECODER = json.JSONDecoder()
+#: Keys under which a model may return its answer (first present wins within an object).
 _ANSWER_KEYS = ("answer", "result", "value", "line", "label", "final")
-#: First signed int/float (optional thousands commas, optional exponent) in a string.
+#: A first signed int/float (optional thousands commas, optional exponent) in a string.
 _NUMBER_RE = re.compile(r"[-+]?\d[\d,]*\.?\d*(?:[eE][-+]?\d+)?")
+#: An explicit ``ANSWER: <x>`` / ``answer = <x>`` line (case-insensitive), leading
+#: markdown bullet/quote decoration tolerated. The last such line wins.
+_ANSWER_LINE_RE = re.compile(r"(?im)^[ \t>*\-]*answer[ \t]*[:=][ \t]*(.+?)[ \t]*$")
+#: A fenced code block ```` ```lang\n...``` ````; group 1 is its body.
+_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]+)?\n(.*?)```", re.DOTALL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,7 +61,11 @@ class ExactMatchGrader:
 
     @property
     def version(self) -> str:
-        return "exact-match-v1"
+        # v2: robust extraction (delimiter / last-answer-object / fence) — v1 let a
+        # spurious JSON array in prose shadow the real answer, mis-scoring correct
+        # verbose responses as 0 (a bias against max-effort configs). Behavior change
+        # => version bump so stored rows re-grade under a new key.
+        return "exact-match-v2"
 
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
         expected = gold.get("expected")
@@ -82,18 +95,55 @@ def _squash(text: str) -> str:
 
 
 def _extract_answer(output: str) -> str | None:
-    """Recover the model's answer: a JSON answer field, a bare scalar, else stripped text."""
-    data = lenient_json(output)
-    if isinstance(data, dict):
-        for key in _ANSWER_KEYS:
-            if data.get(key) is not None:
-                return str(data[key])
-        return None  # a JSON object with no answer key is a format miss, not an answer
-    if isinstance(data, (str, int, float)):
-        return str(data)
-    # No usable JSON object: fall back to the whole stripped output (works when the
-    # model emits just the answer). A blank output is unparseable.
-    return output.strip() or None
+    """Best-effort recovery of the model's answer; ``None`` only on blank output."""
+    stripped = output.strip()
+    if not stripped:
+        return None
+    # 0. The whole output is itself a bare JSON scalar (e.g. "line" or 42). A clean
+    #    JSON *object* is left to the answer-key scan (2) below.
+    try:
+        whole = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        whole = None
+    if isinstance(whole, (str, int, float)):
+        return str(whole)
+
+    # 1. An explicit ANSWER: delimiter line (the robust contract) — last one wins.
+    delimited = None
+    for match in _ANSWER_LINE_RE.finditer(output):
+        delimited = match.group(1).strip()
+    if delimited:
+        return delimited
+
+    # 2. The LAST JSON object carrying an answer key (scan every {/[ start, so a
+    #    spurious array/object in the reasoning cannot shadow the real answer). A bare
+    #    scalar is a fallback used only if no answer-bearing object is found.
+    answer: str | None = None
+    scalar: str | None = None
+    for start in (i for i, ch in enumerate(output) if ch in "{["):
+        try:
+            value, _end = _DECODER.raw_decode(output, start)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(value, dict):
+            for key in _ANSWER_KEYS:
+                if value.get(key) is not None:
+                    answer = str(value[key])  # keep scanning — the LAST answer wins
+                    break
+        elif isinstance(value, (str, int, float)) and scalar is None:
+            scalar = str(value)
+    if answer is not None:
+        return answer
+    if scalar is not None:
+        return scalar
+
+    # 3. A single fenced code block is the answer (multiple fences are ambiguous -> skip).
+    fences: list[str] = [str(f).strip() for f in _FENCE_RE.findall(output)]
+    if len(fences) == 1:
+        return fences[0]
+
+    # 4. The whole stripped output (bare answer) — non-empty by the guard above.
+    return stripped
 
 
 def _numeric_match(answer: str, expected: Any, gold: Mapping[str, Any]) -> bool:
