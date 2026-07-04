@@ -222,6 +222,7 @@ _PREPARERS = {
     "validator": _prepare_validator,
     "anchor": _prepare_anchor,
     "anchor_strict": _prepare_anchor,  # same static prep; only the grader differs
+    "exact_match": _prepare_anchor,  # fully static single-turn: prompt + gold from the YAML
     "books_validate": _prepare_books_validate,
 }
 

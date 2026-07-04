@@ -1,0 +1,52 @@
+# T7 — find-the-injected-bug (single-turn reasoning probe; pressure-test suite).
+# The FUNCTION carries exactly ONE seeded bug; the model must name the single buggy
+# line. Graded by `exact_match` against the gold line (whitespace-insensitive), NOT by
+# `anchor` — anchor scores faithfulness (is the quote FROM the source), which every
+# line satisfies, so it cannot tell "found the bug" from "quoted a line".
+#
+# The bug: `rank = q * n` should be `q * (n - 1)` for type-7 linear interpolation
+# (numpy's default). With `q * n` the q = 1 case computes lo = n and indexes
+# sorted_values[n] -> IndexError, contradicting the docstring's "for q = 1 it returns
+# the maximum"; interior quantiles are shifted too. Two independent detection routes
+# (know type-7 uses n-1, OR trace the q = 1 edge) keep it unambiguous but non-trivial.
+id: t7_find_bug
+domain: debugging
+grader: exact_match
+mode: single
+infra_repo: null
+timeout_s: 300
+tags: [reasoning, single-turn, debugging, pressure-test]
+params:
+  source_text: |
+    def quantile(sorted_values, q):
+        """Return the q-th quantile (0.0 <= q <= 1.0) of an ascending-sorted list.
+
+        Uses linear interpolation between the two nearest order statistics — the
+        'linear' (type 7) method that numpy.quantile uses by default. With n
+        values the result is a weighted blend of neighbouring order statistics;
+        for q = 0 it returns the minimum and for q = 1 it returns the maximum.
+        """
+        n = len(sorted_values)
+        if n == 0:
+            raise ValueError("empty input")
+        if not 0.0 <= q <= 1.0:
+            raise ValueError("q out of range")
+        rank = q * n
+        lo = int(rank)
+        hi = min(lo + 1, n - 1)
+        weight = rank - lo
+        return sorted_values[lo] * (1.0 - weight) + sorted_values[hi] * weight
+gold:
+  expected:
+    - "rank = q * n"
+prompt: |
+  The Python FUNCTION below contains exactly ONE bug: a single line that makes it
+  return incorrect results (or crash) for some valid input. Find that one line.
+
+  Return ONLY JSON of the form:
+    {"answer": "<the single buggy line, copied verbatim from the FUNCTION>", "why": "<one sentence>"}
+  The "answer" must be exactly one line copied from the FUNCTION above — nothing else,
+  no line number, no surrounding lines.
+
+  FUNCTION:
+  {source_text}

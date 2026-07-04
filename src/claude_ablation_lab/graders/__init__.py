@@ -15,7 +15,14 @@ if TYPE_CHECKING:
 
 __all__ = ["get_grader", "GRADER_NAMES"]
 
-GRADER_NAMES = ("classification", "validator", "anchor", "anchor_strict", "books_validate")
+GRADER_NAMES = (
+    "classification",
+    "validator",
+    "anchor",
+    "anchor_strict",
+    "books_validate",
+    "exact_match",
+)
 
 
 def get_grader(name: str) -> Grader:
@@ -36,4 +43,8 @@ def get_grader(name: str) -> Grader:
         from claude_ablation_lab.graders.books_validate import BooksValidateGrader
 
         return BooksValidateGrader()
+    if name == "exact_match":
+        from claude_ablation_lab.graders.exact_match import ExactMatchGrader
+
+        return ExactMatchGrader()
     raise ValueError(f"unknown grader: {name!r} (known: {', '.join(GRADER_NAMES)})")
