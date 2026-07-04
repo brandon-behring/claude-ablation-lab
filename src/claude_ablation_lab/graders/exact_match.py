@@ -61,11 +61,11 @@ class ExactMatchGrader:
 
     @property
     def version(self) -> str:
-        # v2: robust extraction (delimiter / last-answer-object / fence) — v1 let a
-        # spurious JSON array in prose shadow the real answer, mis-scoring correct
-        # verbose responses as 0 (a bias against max-effort configs). Behavior change
-        # => version bump so stored rows re-grade under a new key.
-        return "exact-match-v2"
+        # v3: _squash now strips surrounding backticks/quotes (a markdown-wrapped answer
+        # was scored 0). v2: robust extraction (delimiter / last-answer-object / fence) —
+        # v1 let a spurious JSON array in prose shadow the real answer. Each behavior
+        # change bumps the version so stored rows re-grade under a new key.
+        return "exact-match-v3"
 
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
         expected = gold.get("expected")
@@ -90,8 +90,11 @@ class ExactMatchGrader:
 
 
 def _squash(text: str) -> str:
-    """Remove ALL whitespace — token-level equality for code lines / short answers."""
-    return "".join(str(text).split())
+    """Token-level key for equality: strip surrounding whitespace + markdown-code-span
+    backticks + quotes, then remove all internal whitespace. So ``` `x = 1` ```, ``"x=1"``
+    and ``x=1`` all compare equal — a model that wraps its answer in markdown or quotes
+    (correlated with verbosity/model) is not scored 0 for a correct line."""
+    return "".join(str(text).strip(" \t\r\n`'\"").split())
 
 
 def _extract_answer(output: str) -> str | None:

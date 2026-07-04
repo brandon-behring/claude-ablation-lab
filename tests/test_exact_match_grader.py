@@ -152,5 +152,12 @@ def test_numeric_non_numeric_answer_scores_zero() -> None:
 
 
 @pytest.mark.unit
+def test_markdown_or_quote_wrapped_answer_matches() -> None:
+    # A correct line wrapped in a markdown code span or quotes must not score 0.
+    assert val('{"answer": "`rank = q * n`"}').value == 1.0
+    assert val("ANSWER: `rank = q * n`").value == 1.0
+
+
+@pytest.mark.unit
 def test_version_is_stable() -> None:
-    assert G.version == "exact-match-v2"
+    assert G.version == "exact-match-v3"

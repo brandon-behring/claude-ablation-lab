@@ -90,5 +90,15 @@ def test_subscores_report_found_and_n() -> None:
 
 
 @pytest.mark.unit
+def test_backtick_wrapped_answers_still_match() -> None:
+    # The confound the v2 fix closes: a model that wraps each answer in markdown code
+    # spans found the bugs and must score full, not 0.
+    out = "\n".join(
+        f"ANSWER {i}: `{line}`" for i, line in enumerate(["a = 1", "b = 2", "c = 3", "d = 4"], 1)
+    )
+    assert v(out).value == 1.0
+
+
+@pytest.mark.unit
 def test_version_is_stable() -> None:
-    assert G.version == "exact-match-set-v1"
+    assert G.version == "exact-match-set-v2"

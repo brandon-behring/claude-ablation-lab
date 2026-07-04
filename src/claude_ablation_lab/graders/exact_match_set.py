@@ -41,7 +41,9 @@ class ExactMatchSetGrader:
 
     @property
     def version(self) -> str:
-        return "exact-match-set-v1"
+        # v2: shared _squash now strips surrounding backticks/quotes — v1 scored a
+        # markdown-wrapped answer (`` `line` ``) as 0, biasing by formatting style.
+        return "exact-match-set-v2"
 
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
         expected = gold.get("expected")
