@@ -1,0 +1,50 @@
+# T8 — hard multi-step math/logic (single-turn reasoning probe; pressure-test suite).
+# The one domain that can be dialed past saturation: SIX genuinely hard, multi-step
+# problems with a single checkable integer answer each. If reasoning EFFORT or model
+# TIER ever earns its keep, it should show here (careful multi-step work, error-prone).
+# Graded by `exact_match_set` in numeric mode = fraction of correct answers (smooth k/6).
+#
+# Answers are COMPUTED, not guessed (brute-forced in Python): 7334, 87, 24, 1, 115, 319.
+id: t8_hard_math
+domain: math
+grader: exact_match_set
+mode: single
+infra_repo: null
+timeout_s: 300
+tags: [reasoning, math, single-turn, pressure-test, multi-item]
+params:
+  source_text: |
+    Problem 1. How many integers from 1 to 10000 inclusive are divisible by at least
+    one of 2, 3, or 5?
+
+    Problem 2. What is the sum of all positive integers n with n <= 100 that have
+    exactly three positive divisors?
+
+    Problem 3. How many ordered triples (a, b, c) of positive integers satisfy
+    a + b + c = 20 and a < b < c?
+
+    Problem 4. What is the remainder when 3^200 is divided by 1000?
+
+    Problem 5. What is the sum of the decimal digits of 2^100?
+
+    Problem 6. A fair coin is flipped 10 times. The probability of getting exactly 5
+    heads equals a/b in lowest terms. What is a + b?
+gold:
+  numeric: true
+  expected:
+    - "7334"
+    - "87"
+    - "24"
+    - "1"
+    - "115"
+    - "319"
+prompt: |
+  Solve each of the SIX numbered problems below. Each has a single integer answer.
+
+  Work carefully, then finish with exactly one line per problem:
+    ANSWER 1: <integer>
+    ANSWER 2: <integer>
+    ... through ANSWER 6.
+
+  PROBLEMS:
+  {source_text}

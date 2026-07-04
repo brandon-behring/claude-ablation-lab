@@ -90,6 +90,22 @@ def test_subscores_report_found_and_n() -> None:
 
 
 @pytest.mark.unit
+def test_numeric_mode_matches_number_forms_and_scores_the_fraction() -> None:
+    gold = {"expected": ["42", "100"], "numeric": True}
+    assert G.grade(output="ANSWER 1: 42\nANSWER 2: 100", gold=gold).value == 1.0
+    # commas / "= " / trailing prose all parse to the number; one wrong -> 0.5
+    assert G.grade(output="ANSWER 1: = 42.0\nANSWER 2: 99", gold=gold).value == pytest.approx(0.5)
+    thou = {"expected": ["1000", "100"], "numeric": True}
+    assert G.grade(output="ANSWER 1: 1,000\nANSWER 2: 100", gold=thou).value == 1.0
+
+
+@pytest.mark.unit
+def test_numeric_mode_non_numeric_answer_misses() -> None:
+    gold = {"expected": ["42"], "numeric": True}
+    assert G.grade(output="ANSWER 1: forty-two", gold=gold).value == 0.0
+
+
+@pytest.mark.unit
 def test_backtick_wrapped_answers_still_match() -> None:
     # The confound the v2 fix closes: a model that wraps each answer in markdown code
     # spans found the bugs and must score full, not 0.

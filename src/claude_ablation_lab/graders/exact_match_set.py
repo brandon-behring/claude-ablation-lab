@@ -1,8 +1,8 @@
 """Set exact-match grader — the fraction of a fixed, ordered list of expected answers
 the model got right. Backs the MULTI-ITEM reasoning probes (find-the-bug over N
-functions): a smooth ``k/N`` score per cell, which discriminates far better at low
-epoch counts than a single binary answer (the t7-v1 lesson — one bug saturated and its
-0/1 score was too coarse and too fragile to grade).
+functions; hard-math over N problems): a smooth ``k/N`` score per cell, which
+discriminates far better at low epoch counts than a single binary answer (the t7-v1
+lesson — one bug saturated and its 0/1 score was too coarse and too fragile to grade).
 
 Each sub-problem is numbered ``1..N``. The model answers per number; the score is
 ``(# positions whose answer matches the expected answer) / N``. Extraction is robust to
@@ -13,17 +13,20 @@ spacing/indentation is not penalised.
 
 gold:
   expected: ["<answer 1>", "<answer 2>", ...]   # ordered; position k <-> ANSWER k
+  numeric: false                                # true -> match the first NUMBER per position
+                                                #   (a math answer, tolerant of "= 42" / "42.0" / commas)
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from claude_ablation_lab.grade import Score
-from claude_ablation_lab.graders.exact_match import _squash
+from claude_ablation_lab.graders.exact_match import _first_number, _squash
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -56,12 +59,22 @@ class ExactMatchSetGrader:
         if not got:
             return Score(0.0, status="unparseable", details={"raw": output[:500]})
 
+        numeric = bool(gold.get("numeric", False))
+        rel_tol = float(gold.get("rel_tol", 1e-9))
+        abs_tol = float(gold.get("abs_tol", 0.0))
+
+        def _match(got_i: str, exp: Any) -> bool:
+            if numeric:  # compare the first number in each (a math answer, from prose or "= 42")
+                g, e = _first_number(got_i), _first_number(str(exp))
+                return (
+                    g is not None
+                    and e is not None
+                    and math.isclose(g, e, rel_tol=rel_tol, abs_tol=abs_tol)
+                )
+            return _squash(got_i) == _squash(str(exp))
+
         n = len(expected)
-        hits = sum(
-            1
-            for i, exp in enumerate(expected, start=1)
-            if i in got and _squash(got[i]) == _squash(str(exp))
-        )
+        hits = sum(1 for i, exp in enumerate(expected, start=1) if i in got and _match(got[i], exp))
         return Score(
             value=hits / n,
             subscores={"n": float(n), "found": float(hits)},
