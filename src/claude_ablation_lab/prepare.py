@@ -223,6 +223,7 @@ _PREPARERS = {
     "anchor": _prepare_anchor,
     "anchor_strict": _prepare_anchor,  # same static prep; only the grader differs
     "exact_match": _prepare_anchor,  # fully static single-turn: prompt + gold from the YAML
+    "exact_match_set": _prepare_anchor,  # same static prep; multi-item fraction grader
     "books_validate": _prepare_books_validate,
 }
 

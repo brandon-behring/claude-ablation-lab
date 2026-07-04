@@ -1,36 +1,62 @@
-# T7 — find-the-injected-bug (single-turn reasoning probe; pressure-test suite).
-# The FUNCTION carries exactly ONE seeded bug; the model must name the single buggy
-# line. Graded by `exact_match` against the gold line (whitespace-insensitive), NOT by
-# `anchor` — anchor scores faithfulness (is the quote FROM the source), which every
-# line satisfies, so it cannot tell "found the bug" from "quoted a line".
+# T7 — find-the-injected-bug, MULTI-ITEM (single-turn reasoning probe; pressure-test).
+# Hardened from the v1 single-bug design, which SATURATED (every config ~solved it) and
+# whose binary 0/1 score was too coarse + too fragile to grade. Now SIX numbered
+# functions, each with exactly one seeded bug spanning easy -> subtle; the model names
+# the buggy line of each. Graded by `exact_match_set` = fraction found (a smooth k/6
+# score that discriminates at low n, and — after the v1 grader confound — robust to
+# verbose prose via the `ANSWER k:` contract).
 #
-# The bug: `rank = q * n` should be `q * (n - 1)` for type-7 linear interpolation
-# (numpy's default). With `q * n` the q = 1 case computes lo = n and indexes
-# sorted_values[n] -> IndexError, contradicting the docstring's "for q = 1 it returns
-# the maximum"; interior quantiles are shifted too. Two independent detection routes
-# (know type-7 uses n-1, OR trace the q = 1 edge) keep it unambiguous but non-trivial.
+# Bugs (unambiguous, one per function): 1 range(1,n) drops n; 2 `<` finds the min;
+# 3 `//` truncates a float mean; 4 `+1` off-by-one drops one element; 5 result[i] is
+# out of range (should be result[i-1]); 6 type-7 rank q*n should be q*(n-1).
 id: t7_find_bug
 domain: debugging
-grader: exact_match
+grader: exact_match_set
 mode: single
 infra_repo: null
 timeout_s: 300
-tags: [reasoning, single-turn, debugging, pressure-test]
+tags: [reasoning, single-turn, debugging, pressure-test, multi-item]
 params:
   source_text: |
-    def quantile(sorted_values, q):
-        """Return the q-th quantile (0.0 <= q <= 1.0) of an ascending-sorted list.
+    # Function 1
+    def sum_to_n(n):
+        """Sum of the integers 1..n inclusive."""
+        total = 0
+        for i in range(1, n):
+            total += i
+        return total
 
-        Uses linear interpolation between the two nearest order statistics — the
-        'linear' (type 7) method that numpy.quantile uses by default. With n
-        values the result is a weighted blend of neighbouring order statistics;
-        for q = 0 it returns the minimum and for q = 1 it returns the maximum.
-        """
+    # Function 2
+    def maximum(xs):
+        """Return the largest element of a non-empty list."""
+        best = xs[0]
+        for x in xs:
+            if x < best:
+                best = x
+        return best
+
+    # Function 3
+    def average(xs):
+        """Arithmetic mean of a non-empty list of numbers, as a float."""
+        return sum(xs) // len(xs)
+
+    # Function 4
+    def last_k(xs, k):
+        """Return the last k elements of xs, in their original order."""
+        return xs[len(xs) - k + 1:]
+
+    # Function 5
+    def running_max(xs):
+        """Return a list where output[i] = max(xs[0..i]), the max of the prefix ending at i."""
+        result = [xs[0]]
+        for i in range(1, len(xs)):
+            result.append(max(result[i], xs[i]))
+        return result
+
+    # Function 6
+    def quantile(sorted_values, q):
+        """The q-th quantile (0 <= q <= 1) via type-7 linear interpolation (numpy's default)."""
         n = len(sorted_values)
-        if n == 0:
-            raise ValueError("empty input")
-        if not 0.0 <= q <= 1.0:
-            raise ValueError("q out of range")
         rank = q * n
         lo = int(rank)
         hi = min(lo + 1, n - 1)
@@ -38,15 +64,22 @@ params:
         return sorted_values[lo] * (1.0 - weight) + sorted_values[hi] * weight
 gold:
   expected:
+    - "for i in range(1, n):"
+    - "if x < best:"
+    - "return sum(xs) // len(xs)"
+    - "return xs[len(xs) - k + 1:]"
+    - "result.append(max(result[i], xs[i]))"
     - "rank = q * n"
 prompt: |
-  The Python FUNCTION below contains exactly ONE bug: a single line that makes it
-  return incorrect results (or crash) for some valid input. Find that one line.
+  Below are SIX numbered Python functions. Each contains EXACTLY ONE bug — a single
+  line that makes it return incorrect results or crash for some valid input. For every
+  function, identify that one buggy line.
 
-  Return ONLY JSON of the form:
-    {"answer": "<the single buggy line, copied verbatim from the FUNCTION>", "why": "<one sentence>"}
-  The "answer" must be exactly one line copied from the FUNCTION above — nothing else,
-  no line number, no surrounding lines.
+  Reason as needed, then finish with exactly one line per function, in this format:
+    ANSWER 1: <the buggy line of Function 1, copied verbatim>
+    ANSWER 2: <the buggy line of Function 2>
+    ... through ANSWER 6.
+  Each answer must be a single line copied from that function — nothing else.
 
-  FUNCTION:
+  FUNCTIONS:
   {source_text}

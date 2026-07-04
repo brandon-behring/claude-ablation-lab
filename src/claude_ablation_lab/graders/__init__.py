@@ -22,6 +22,7 @@ GRADER_NAMES = (
     "anchor_strict",
     "books_validate",
     "exact_match",
+    "exact_match_set",
 )
 
 
@@ -47,4 +48,8 @@ def get_grader(name: str) -> Grader:
         from claude_ablation_lab.graders.exact_match import ExactMatchGrader
 
         return ExactMatchGrader()
+    if name == "exact_match_set":
+        from claude_ablation_lab.graders.exact_match_set import ExactMatchSetGrader
+
+        return ExactMatchSetGrader()
     raise ValueError(f"unknown grader: {name!r} (known: {', '.join(GRADER_NAMES)})")
