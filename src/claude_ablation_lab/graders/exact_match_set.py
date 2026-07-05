@@ -17,9 +17,12 @@ Two modes:
   **whole cell ``unparseable``** (excluded from the mean, *never* a silently-biased 0).
   This is deliberate: three separate "lenient extraction" confounds (a spurious JSON array
   shadowing the answer; backtick wrapping; first-number-on-the-line) each scored *correct*
-  verbose answers as 0 and biased the A/B against high-effort models. Strict parsing is
-  unbiased by construction — non-compliance surfaces as a visible ``unparseable`` count,
-  not a corrupted score — and the task prompt demands a bare answer at the source.
+  verbose answers as 0 and biased the A/B against high-effort models. Strict parsing removes
+  that biased *zero* — non-compliance surfaces as a visible ``unparseable`` count rather than a
+  corrupted score — but trades it for a *missing-data* bias if the unparseable rate is nonzero
+  and correlates with model/effort (a config that admits failure is dropped; one that guesses is
+  scored). So it is safe only when unparseables are ~0: treat a nonzero rate as an invalid-run /
+  gating signal, not neutral missing data. The task prompt demands a bare answer to keep it ~0.
 
 gold:
   expected: ["<answer 1>", "<answer 2>", ...]   # ordered; position k <-> ANSWER k
@@ -56,10 +59,10 @@ class ExactMatchSetGrader:
 
     @property
     def version(self) -> str:
-        # v3: numeric mode is STRICT (bare integer per position, else the cell is
-        # unparseable) — v2's lenient first-number match scored correct verbose answers 0
-        # and biased against high-effort configs. v2: _squash strips backticks/quotes.
-        return "exact-match-set-v3"
+        # v4: shared _squash now also drops inline comments / trailing periods (an annotated
+        # correct code line was scored 0 in string mode). v3: numeric mode STRICT (bare integer
+        # per position, else the cell is unparseable). v2: _squash strips backticks/quotes.
+        return "exact-match-set-v4"
 
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
         expected = gold.get("expected")
@@ -75,6 +78,15 @@ class ExactMatchSetGrader:
         n = len(expected)
 
         if bool(gold.get("numeric", False)):
+            # A numeric gold must itself be bare integers — else a typo'd gold is silently
+            # unhittable for every config (a fixture bug: surface it, don't deflate scores).
+            gold_ints = [_bare_int(str(e)) for e in expected]
+            if any(g is None for g in gold_ints):
+                return Score(
+                    0.0,
+                    status="grader_error",
+                    details={"reason": "numeric gold must be bare integers"},
+                )
             # STRICT: every ANSWERED position (1..N) must be a bare integer, else the whole
             # cell is unparseable. Absent positions are misses (they count in N).
             parsed: dict[int, int] = {}
@@ -90,9 +102,7 @@ class ExactMatchSetGrader:
                     )
                 parsed[k] = value
             hits = sum(
-                1
-                for i, exp in enumerate(expected, start=1)
-                if i in parsed and _bare_int(str(exp)) == parsed[i]
+                1 for i, g in enumerate(gold_ints, start=1) if i in parsed and g == parsed[i]
             )
         else:
             hits = sum(

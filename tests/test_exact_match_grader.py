@@ -159,5 +159,12 @@ def test_markdown_or_quote_wrapped_answer_matches() -> None:
 
 
 @pytest.mark.unit
+def test_inline_comment_and_trailing_period_are_stripped() -> None:
+    # An annotated correct code line (the t7 string-mode bias) must not score 0 for the comment.
+    assert val('{"answer": "rank = q * n  # should be q*(n-1)"}').value == 1.0
+    assert val('{"answer": "rank = q * n."}').value == 1.0
+
+
+@pytest.mark.unit
 def test_version_is_stable() -> None:
-    assert G.version == "exact-match-v3"
+    assert G.version == "exact-match-v4"

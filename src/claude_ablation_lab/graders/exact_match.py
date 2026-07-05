@@ -24,8 +24,12 @@ spurious array like ``[10, 20, 30]`` in the reasoning cannot shadow the real ans
 object (the v1 bug); (3) a lone ```` ``` ````-fenced code block; (4) the whole stripped
 output. Comparison is **whitespace-insensitive** (all whitespace removed) so re-typing
 a code line with different spacing/indentation is not penalised. It is equality, not
-containment: dumping the whole function does NOT match. Numeric mode parses the first
-number and compares with :func:`math.isclose`.
+containment: dumping the whole function does NOT match.
+
+Numeric mode here is the **lenient first-number** match and still carries the effort-bias
+confound (``= 1`` in ``3^200 mod 1000 = 1`` parses ``3``); it is currently unused by any task.
+For unbiased numeric grading use the **strict bare-integer** mode of
+:class:`~claude_ablation_lab.graders.exact_match_set.ExactMatchSetGrader`.
 """
 
 from __future__ import annotations
@@ -61,11 +65,11 @@ class ExactMatchGrader:
 
     @property
     def version(self) -> str:
-        # v3: _squash now strips surrounding backticks/quotes (a markdown-wrapped answer
-        # was scored 0). v2: robust extraction (delimiter / last-answer-object / fence) —
-        # v1 let a spurious JSON array in prose shadow the real answer. Each behavior
+        # v4: _squash also drops a trailing inline "# comment" + trailing period (an annotated
+        # correct code line was scored 0 — the same effort-bias, string-mode). v3: _squash strips
+        # backticks/quotes. v2: robust extraction (delimiter / last-object / fence). Each behavior
         # change bumps the version so stored rows re-grade under a new key.
-        return "exact-match-v3"
+        return "exact-match-v4"
 
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
         expected = gold.get("expected")
@@ -90,11 +94,13 @@ class ExactMatchGrader:
 
 
 def _squash(text: str) -> str:
-    """Token-level key for equality: strip surrounding whitespace + markdown-code-span
-    backticks + quotes, then remove all internal whitespace. So ``` `x = 1` ```, ``"x=1"``
-    and ``x=1`` all compare equal — a model that wraps its answer in markdown or quotes
-    (correlated with verbosity/model) is not scored 0 for a correct line."""
-    return "".join(str(text).strip(" \t\r\n`'\"").split())
+    """Token-level key for equality: drop a trailing inline ``# comment``, strip surrounding
+    whitespace + markdown-code-span backticks + quotes + a trailing period, then remove all
+    internal whitespace. So ``for i in range(1, n):  # fix``, ``` `x = 1` ```, ``"x=1"`` and
+    ``x=1`` all compare equal — a model that annotates, wraps, or reflows a correct code line
+    is not scored 0 for formatting (the string-mode analog of the numeric bias fixes)."""
+    stripped = re.sub(r"\s+#.*$", "", str(text))  # a trailing inline "# explanation"
+    return "".join(stripped.strip(" \t\r\n`'\"").rstrip(".").split())
 
 
 def _extract_answer(output: str) -> str | None:

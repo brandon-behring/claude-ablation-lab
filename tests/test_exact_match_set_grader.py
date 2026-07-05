@@ -150,5 +150,19 @@ def test_backtick_wrapped_answers_still_match() -> None:
 
 
 @pytest.mark.unit
+def test_string_mode_inline_comment_and_period_are_stripped() -> None:
+    # F1 (pre-merge review): an annotated-but-correct code line must not score 0 in string mode.
+    assert v(_ans(["a = 1  # first", "b = 2  # second", "c = 3", "d = 4."])).value == 1.0
+
+
+@pytest.mark.unit
+def test_numeric_gold_must_be_bare_integers() -> None:
+    # F3: a non-bare numeric gold (typo / decimal) is a fixture bug -> grader_error, not a
+    # silently unhittable item that deflates every config's score.
+    bad = {"expected": ["3.5"], "numeric": True}
+    assert G.grade(output="ANSWER 1: 42", gold=bad).status == "grader_error"
+
+
+@pytest.mark.unit
 def test_version_is_stable() -> None:
-    assert G.version == "exact-match-set-v3"
+    assert G.version == "exact-match-set-v4"
