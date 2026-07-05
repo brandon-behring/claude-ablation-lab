@@ -4,29 +4,37 @@ functions; hard-math over N problems): a smooth ``k/N`` score per cell, which
 discriminates far better at low epoch counts than a single binary answer (the t7-v1
 lesson — one bug saturated and its 0/1 score was too coarse and too fragile to grade).
 
-Each sub-problem is numbered ``1..N``. The model answers per number; the score is
-``(# positions whose answer matches the expected answer) / N``. Extraction is robust to
-verbose prose (the other t7-v1 lesson): per-number ``ANSWER k: <x>`` lines (last per k
-wins), or a JSON ``{"answers": {"1": ...}}`` object. Comparison is whitespace-insensitive
-(shared ``_squash`` with :mod:`exact_match`), so re-typing a code line with different
-spacing/indentation is not penalised.
+Each sub-problem is numbered ``1..N``; the model answers per number via ``ANSWER k: <x>``
+lines (last per k wins) or a JSON ``{"answers": {"1": ...}}`` object.
+
+Two modes:
+
+- **string** (default; t7 find-the-bug): score = fraction of positions whose answer
+  ``_squash``-equals the gold (whitespace/backtick/quote-insensitive).
+- **numeric** (``gold.numeric: true``; t8 hard-math): **STRICT** — each answered position
+  must be a *bare integer* (digits, optional leading sign, valid thousands groups only).
+  Anything else — an equation, prose, a fraction, markdown, a stray number — makes the
+  **whole cell ``unparseable``** (excluded from the mean, *never* a silently-biased 0).
+  This is deliberate: three separate "lenient extraction" confounds (a spurious JSON array
+  shadowing the answer; backtick wrapping; first-number-on-the-line) each scored *correct*
+  verbose answers as 0 and biased the A/B against high-effort models. Strict parsing is
+  unbiased by construction — non-compliance surfaces as a visible ``unparseable`` count,
+  not a corrupted score — and the task prompt demands a bare answer at the source.
 
 gold:
   expected: ["<answer 1>", "<answer 2>", ...]   # ordered; position k <-> ANSWER k
-  numeric: false                                # true -> match the first NUMBER per position
-                                                #   (a math answer, tolerant of "= 42" / "42.0" / commas)
+  numeric: false                                # true -> strict bare-integer match per position
 """
 
 from __future__ import annotations
 
 import json
-import math
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from claude_ablation_lab.grade import Score
-from claude_ablation_lab.graders.exact_match import _first_number, _squash
+from claude_ablation_lab.graders.exact_match import _squash
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -36,6 +44,10 @@ __all__ = ["ExactMatchSetGrader"]
 _DECODER = json.JSONDecoder()
 #: ``ANSWER 3: <x>`` / ``answer #3 = <x>`` (case-insensitive), one per line; last k wins.
 _ANSWER_N_RE = re.compile(r"(?im)^[ \t>*\-]*answer[ \t]*#?[ \t]*(\d+)[ \t]*[:=][ \t]*(.+?)[ \t]*$")
+#: Surrounding markdown / quote / LaTeX wrappers stripped before the bare-integer check.
+_WRAP_CHARS = " \t\r\n*_`'\"$"
+#: A BARE integer: plain digits, or valid thousands groups (``7,334`` ok, ``2,4`` not).
+_BARE_INT_RE = re.compile(r"^[+-]?(?:\d+|\d{1,3}(?:,\d{3})+)$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,9 +56,10 @@ class ExactMatchSetGrader:
 
     @property
     def version(self) -> str:
-        # v2: shared _squash now strips surrounding backticks/quotes — v1 scored a
-        # markdown-wrapped answer (`` `line` ``) as 0, biasing by formatting style.
-        return "exact-match-set-v2"
+        # v3: numeric mode is STRICT (bare integer per position, else the cell is
+        # unparseable) — v2's lenient first-number match scored correct verbose answers 0
+        # and biased against high-effort configs. v2: _squash strips backticks/quotes.
+        return "exact-match-set-v3"
 
     def grade(self, *, output: str, gold: Mapping[str, Any]) -> Score:
         expected = gold.get("expected")
@@ -59,27 +72,49 @@ class ExactMatchSetGrader:
         if not got:
             return Score(0.0, status="unparseable", details={"raw": output[:500]})
 
-        numeric = bool(gold.get("numeric", False))
-        rel_tol = float(gold.get("rel_tol", 1e-9))
-        abs_tol = float(gold.get("abs_tol", 0.0))
-
-        def _match(got_i: str, exp: Any) -> bool:
-            if numeric:  # compare the first number in each (a math answer, from prose or "= 42")
-                g, e = _first_number(got_i), _first_number(str(exp))
-                return (
-                    g is not None
-                    and e is not None
-                    and math.isclose(g, e, rel_tol=rel_tol, abs_tol=abs_tol)
-                )
-            return _squash(got_i) == _squash(str(exp))
-
         n = len(expected)
-        hits = sum(1 for i, exp in enumerate(expected, start=1) if i in got and _match(got[i], exp))
+
+        if bool(gold.get("numeric", False)):
+            # STRICT: every ANSWERED position (1..N) must be a bare integer, else the whole
+            # cell is unparseable. Absent positions are misses (they count in N).
+            parsed: dict[int, int] = {}
+            for k, raw in got.items():
+                if not 1 <= k <= n:
+                    continue  # an extra ANSWER beyond N is ignored, not a fault
+                value = _bare_int(raw)
+                if value is None:
+                    return Score(
+                        0.0,
+                        status="unparseable",
+                        details={"reason": f"position {k} is not a bare integer", "raw": raw[:100]},
+                    )
+                parsed[k] = value
+            hits = sum(
+                1
+                for i, exp in enumerate(expected, start=1)
+                if i in parsed and _bare_int(str(exp)) == parsed[i]
+            )
+        else:
+            hits = sum(
+                1
+                for i, exp in enumerate(expected, start=1)
+                if i in got and _squash(got[i]) == _squash(str(exp))
+            )
+
         return Score(
             value=hits / n,
             subscores={"n": float(n), "found": float(hits)},
             details={"answered": len(got)},
         )
+
+
+def _bare_int(text: str) -> int | None:
+    """The int value iff ``text`` — after stripping surrounding markdown/quote/LaTeX wrappers —
+    is a BARE integer (plain digits or valid thousands groups). Otherwise ``None``."""
+    stripped = str(text).strip(_WRAP_CHARS)
+    if not _BARE_INT_RE.match(stripped):
+        return None
+    return int(stripped.replace(",", ""))
 
 
 def _extract_answers(output: str) -> dict[int, str]:

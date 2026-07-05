@@ -89,20 +89,54 @@ def test_subscores_report_found_and_n() -> None:
     assert s.subscores["n"] == 4.0 and s.subscores["found"] == 2.0
 
 
+NUM = {"expected": ["42", "100"], "numeric": True}
+
+
 @pytest.mark.unit
-def test_numeric_mode_matches_number_forms_and_scores_the_fraction() -> None:
-    gold = {"expected": ["42", "100"], "numeric": True}
-    assert G.grade(output="ANSWER 1: 42\nANSWER 2: 100", gold=gold).value == 1.0
-    # commas / "= " / trailing prose all parse to the number; one wrong -> 0.5
-    assert G.grade(output="ANSWER 1: = 42.0\nANSWER 2: 99", gold=gold).value == pytest.approx(0.5)
+def test_numeric_strict_bare_integers_score() -> None:
+    assert G.grade(output="ANSWER 1: 42\nANSWER 2: 100", gold=NUM).value == 1.0
+    # valid thousands grouping is still a bare integer
     thou = {"expected": ["1000", "100"], "numeric": True}
     assert G.grade(output="ANSWER 1: 1,000\nANSWER 2: 100", gold=thou).value == 1.0
+    # markdown / quote / LaTeX WRAPPERS are stripped, still bare
+    assert G.grade(output="ANSWER 1: `42`\nANSWER 2: $100$", gold=NUM).value == 1.0
+    # JSON answers object with bare ints
+    assert G.grade(output='{"answers": {"1": 42, "2": 100}}', gold=NUM).value == 1.0
+    # bare but WRONG -> a correct low score, NOT unparseable
+    assert G.grade(output="ANSWER 1: 42\nANSWER 2: 99", gold=NUM).value == pytest.approx(0.5)
 
 
 @pytest.mark.unit
-def test_numeric_mode_non_numeric_answer_misses() -> None:
-    gold = {"expected": ["42"], "numeric": True}
-    assert G.grade(output="ANSWER 1: forty-two", gold=gold).value == 0.0
+def test_numeric_strict_absent_position_is_a_miss_not_unparseable() -> None:
+    s = G.grade(output="ANSWER 1: 42", gold=NUM)  # position 2 absent
+    assert s.status == "ok" and s.value == pytest.approx(0.5)
+
+
+@pytest.mark.unit
+def test_numeric_strict_non_bare_answer_makes_the_cell_unparseable() -> None:
+    # The three confounds the strict rule closes: an equation / restated-problem / fraction
+    # answer that the OLD first-number match scored as a correct 0 (biasing against verbose
+    # high-effort configs) is now EXCLUDED (unparseable), never a silent, effort-biased 0.
+    for ans in ("42 = 6*7", "problem 1 -> 42", "84/2 so 42", "42 (by the formula)", "forty-two"):
+        assert (
+            G.grade(output=f"ANSWER 1: {ans}\nANSWER 2: 100", gold=NUM).status == "unparseable"
+        ), ans
+
+
+@pytest.mark.unit
+def test_numeric_strict_false_positive_is_unparseable() -> None:
+    # "42? no, final 41" would FALSE-HIT gold 42 under first-number match; strict excludes it.
+    assert (
+        G.grade(output="ANSWER 1: 42? no, final 41\nANSWER 2: 100", gold=NUM).status
+        == "unparseable"
+    )
+
+
+@pytest.mark.unit
+def test_numeric_strict_comma_merge_is_not_a_bare_integer() -> None:
+    # "2,4" (invalid thousands grouping) must NOT parse as 24 — the comma-merge false-hit bug.
+    gold = {"expected": ["24", "100"], "numeric": True}
+    assert G.grade(output="ANSWER 1: 2,4\nANSWER 2: 100", gold=gold).status == "unparseable"
 
 
 @pytest.mark.unit
@@ -117,4 +151,4 @@ def test_backtick_wrapped_answers_still_match() -> None:
 
 @pytest.mark.unit
 def test_version_is_stable() -> None:
-    assert G.version == "exact-match-set-v2"
+    assert G.version == "exact-match-set-v3"

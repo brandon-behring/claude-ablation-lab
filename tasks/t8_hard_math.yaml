@@ -41,7 +41,11 @@ gold:
 prompt: |
   Solve each of the SIX numbered problems below. Each has a single integer answer.
 
-  Work carefully, then finish with exactly one line per problem:
+  Work carefully, then finish with exactly one line per problem. After "ANSWER k:" write
+  ONLY the integer — digits with an optional leading minus — and NOTHING else: no words,
+  no equations, no units, no fractions, no markdown, no punctuation. For example:
+    ANSWER 1: 7334
+  Do exactly this for all six:
     ANSWER 1: <integer>
     ANSWER 2: <integer>
     ... through ANSWER 6.
