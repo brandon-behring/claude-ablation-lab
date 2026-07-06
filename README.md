@@ -158,6 +158,33 @@ access outside its worktree): it grants Bash, and the grade-time answer key live
 its public mirror, so an un-sandboxed cell could `curl`/`cat` the gold and saturate the task — a
 3-voice review finding, documented in `tasks/t6_books_validate_agent.yaml`.
 
+## The Claude-5 refresh — same grid, next generation (2026-07-06)
+
+The audit added a **release-tracking grid** ([`grids/claude5-refresh.yaml`](grids/claude5-refresh.yaml)):
+re-run the same cheap probe (t8 hard-math) each model generation and watch the frontier move. The
+first run (39/39 cells, 13 configs incl. `claude-fable-5` and the new `xhigh` tier, ≈$4.7 equiv)
+landed one headline the USD-only frontier had been hiding — **each cost axis crowns a different
+winner** (`ablation plot --x-axis cost|latency|tokens`):
+
+| axis (what it costs *you*) | Pareto winner | the catch |
+|---|---|---|
+| **$ (API-equivalent)** | `haiku/high` — $0.051 | …but 64 s and ~9,600 output tokens per cell |
+| **latency (wall-clock)** | `sonnet/low` — 16.2 s | at $0.057, 1,553 tokens — the all-round pick |
+| **output tokens (rate-limit headroom)** | `claude-fable-5/low` — **998 tokens** | fewest tokens of *any* config, 17.4 s — but $0.138 by API price |
+
+![t8 token frontier](docs/figures/t8_hard_math_pareto_tokens.png)
+
+On a flat subscription the real budgets are **time and rate-limit headroom**, not dollars — and on
+those axes haiku's "cheapness" is a pricing illusion: it burned 6–10× the tokens and 3–4× the
+wall-clock of `sonnet/low` for the same (saturated) quality, and its only quality slip in the whole
+sweep was `haiku/low` wandering off-task on one epoch (0.667, flagged `⚠1unp`). Two more notes:
+effort helped at the tier floor (`haiku/low → high` = 0.667 → 1.000) while at the top it only added
+cost (`fable/max` = 2.2× `fable/low` for +0.000 quality), and Fable 5 at **low** effort was the most
+token-efficient config in the sweep — consistent with Anthropic's claim that lower effort on the
+Claude 5 family rivals prior models. t8 stays saturated for sonnet/opus/fable, so this grid tracks
+the *cost* axes across releases; the quality question lives with the discriminating tasks. Run
+ledger is local (`results/` is gitignored; the committed figures + this table are the record).
+
 ## Status
 
 Alpha — **build phases 0–6 complete and the public showcase shipped** (the live 54-cell run above, sanitized ledger + figures committed). Runner + worktree isolation with hermetic tool-minimal cells, 4 graders (run/grade decoupled), grid + JSONL ledger + orchestrator (resumable, provenance-stamped, back-off/halt + an infra circuit breaker), DuckDB `report`/`compare` (exact sign-flip verdicts; honest unparseable accounting), `estimate`, and `ablation plot` figures. A full-repo 3-lens ship-review (correctness · methodology · cold-read) is recorded in [`docs/design/2026-07-01_comprehensive-review.md`](docs/design/2026-07-01_comprehensive-review.md), and the pre-sweep checkpoint review in [`docs/design/2026-07-02_checkpoint-review.md`](docs/design/2026-07-02_checkpoint-review.md). The broader v1 sweep (T1/T2) is user-driven — it spends real rate-limit headroom. See `CLAUDE.md` for conventions, [`docs/METHODOLOGY.md`](docs/METHODOLOGY.md) for how the numbers stay honest, and per-phase reviews in [`docs/design/`](docs/design/).
