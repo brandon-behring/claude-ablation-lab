@@ -56,7 +56,7 @@ Shuffle the gold labels and re-grade — AUROC must collapse to ~0.5; a deviatio
 
 - **Runner** drives `claude -p --model <m> --effort <e> --output-format json --max-budget-usd <cap>` with `cwd` = the variant's worktree.
 - **Variant = `infra_repo@ref`**, materialized as a persistent `git worktree` per `(repo, ref)` (reused across the sweep). Infra-agnostic tasks set `infra_repo: null`.
-- **Grid** = tasks × valid `(model, effort)` pairs × variants × epochs. The validity matrix is probed empirically, not assumed — **re-probed 2026-07-06 on CLI 2.1.201: every alias (haiku/sonnet/opus/claude-fable-5) accepts every effort `low|medium|high|xhigh|max` (20/20 minimal cells ok)**, so `effort_support` is now a budget tool, not a validity one. ⚠ CLI footgun: an *unknown* effort value warns and silently runs at the default — never trust an effort label you didn't validate.
+- **Grid** = tasks × valid `(model, effort)` pairs × variants × epochs. The validity matrix is probed empirically, not assumed — **re-probed 2026-07-06 on CLI 2.1.201: every alias (haiku/sonnet/opus/claude-fable-5) *accepts* every effort `low|medium|high|xhigh|max` (20/20 minimal cells ok)**, so `effort_support` is now a budget tool for accepted pairs — but acceptance ≠ *application*: whether a tier is honored is only observable behaviorally (haiku/xhigh ≈ haiku/high in the refresh data — likely silently clamped; Anthropic docs don't list xhigh for Haiku 4.5). ⚠ CLI footgun: an *unknown* effort value warns and silently runs at the default — never trust an effort label you didn't validate.
 - **Ledger** = append-only JSONL (resumable: skip completed cells) + `results/transcripts/<run_id>.json` sidecars.
 
 ## Project structure

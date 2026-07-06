@@ -153,14 +153,22 @@ auth), ≈ $1.42 total equivalent:
 | `claude-fable-5` | `claude-fable-5` | ok | ok | ok | ok | ok |
 
 **"`max` effort is Opus-only" is retired** — every alias accepts every effort, so
-`effort_support` in grids is now a *budget* tool, not a validity one. Two bonus
-observations worth keeping: (a) on the trivial "reply with exactly: ok" probe,
-haiku emitted 38–40 output tokens (it did not obey the exactness instruction)
-while sonnet/opus emitted 4 — instruction-following differs at the tier floor
-even on trivia; (b) fable's output grew with effort on the *same* prompt
-(4 → 4 → 17 → 21 → 68 tokens across the ladder) — adaptive thinking visibly
-engages from `high` upward, i.e. the effort lever is behaviorally live even when
-the answer is one word.
+`effort_support` in grids is now a *budget* tool for accepted pairs. **Honest
+scope (adversarial re-review): "ok" here means the CLI+API *accepted* the pair —
+not that the requested effort was *applied*.** Whether a tier is honored is only
+observable behaviorally, and the refresh data suggests at least one silent clamp:
+`haiku/xhigh` is indistinguishable from `haiku/high` (9,860 vs 9,599 output
+tokens; latency no higher) while fable's ladder moves cleanly
+(1,657 → 1,870 → 4,365 across high → xhigh → max) — and Anthropic's docs do not
+list `xhigh` for Haiku 4.5. Treat an accepted-but-unlisted (model, effort) cell
+as possibly mislabeled — the same footgun class as the unknown-effort silent
+default above. Two bonus observations worth keeping: (a) on the trivial "reply
+with exactly: ok" probe, haiku emitted 38–40 output tokens (it did not obey the
+exactness instruction) while sonnet/opus emitted 4 — instruction-following
+differs at the tier floor even on trivia; (b) fable's output grew with effort on
+the *same* prompt (4 → 4 → 17 → 21 → 68 tokens across the ladder) — adaptive
+thinking visibly engages from `high` upward, i.e. the effort lever is
+behaviorally live even when the answer is one word.
 
 ### The Claude-5 refresh (first cross-release data point)
 
@@ -173,38 +181,53 @@ flagged `⚠1unp`, not a formatting artifact of a correct answer).
 
 Quality: 12/13 configs at 1.000 (t8 stays saturated for sonnet/opus/fable, as
 predicted — this grid tracks the cost axes); haiku/low 0.667 is the sweep's only
-quality signal. The economics, per axis:
+quality signal. The economics, per axis — **means with [min–max] epoch ranges at
+n = 3; these are exploratory point estimates, not settled rankings** (the house
+rule: never trust a point estimate):
 
-| config | qual | $ | lat s | out-tok |
+| config | qual | $ (range) | lat s (range) | out-tok (range) |
 |---|---|---|---|---|
-| `haiku/high` | 1.000 | **$0.051** ★$ | 64.2 | 9,599 |
-| `sonnet/low` | 1.000 | $0.057 | **16.2** ★lat | 1,553 |
-| `haiku/low` | 0.667 | $0.066 | 54.8 | 10,110 |
-| `opus/low` | 1.000 | $0.071 | 19.3 | 1,258 |
-| `opus/xhigh` | 1.000 | $0.116 | 34.4 | 3,091 |
-| `claude-fable-5/low` | 1.000 | $0.138 | 17.4 | **998** ★tok |
-| `claude-fable-5/max` | 1.000 | $0.306 | 48.5 | 4,365 |
+| `haiku/high` | 1.000 | 0.051 [0.032–0.067] ★$ | 64.2 [31–106] | 9,599 [6,262–11,844] |
+| `sonnet/low` | 1.000 | 0.057 [0.024–0.118] | 16.2 [13.3–18.8] ★lat | 1,553 [1,273–1,734] |
+| `haiku/low` | 0.667 | 0.066 [0.055–0.073] | 54.8 [54.4–55.6] | 10,110 [9,140–10,728] |
+| `opus/low` | 1.000 | 0.071 [0.052–0.102] | 19.3 [16.5–22.4] | 1,258 [1,033–1,505] |
+| `opus/xhigh` | 1.000 | 0.116 [0.099–0.134] | 34.4 [30.7–38.6] | 3,091 [2,784–3,562] |
+| `claude-fable-5/low` | 1.000 | 0.138 [0.103–0.199] | 17.4 [16.4–18.2] | 998 [868–1,152] ★tok |
+| `claude-fable-5/max` | 1.000 | 0.306 [0.235–0.347] | 48.5 [42.8–59.8] | 4,365 [3,617–5,655] |
 
-(7 of 13 rows shown; full ledger local.) **Each axis crowns a different
-winner** — `--x-axis` is not cosmetic:
+(7 of 13 rows shown; full ledger local.) The ★ point-estimate frontier winners
+differ per axis — but **the individual crowns are not separated beyond run
+variance**: `sonnet/low` was *cheaper than* `haiku/high` in 2 of 3 epochs (one
+$0.118 outlier epoch decides the USD crown), and the latency and token crowns'
+ranges also overlap their runners-up. The claim that survives the noise is the
+**axis-dependence of the ranking itself**: haiku is top-tier on USD but
+bottom-tier on tokens and latency in every epoch; fable/low and sonnet/low are
+top-tier on tokens/latency but mid-pack on USD in every epoch. `--x-axis` is
+not cosmetic — but crowning a single winner per axis needs more epochs.
 
-- **USD frontier: `haiku/high`.** But haiku burned 6–10× the output tokens and
-  3–4× the wall-clock of `sonnet/low` for the same quality — on a flat
+- **USD axis:** `haiku/high` is the point-estimate frontier — but haiku burned
+  ~6× the output tokens of `sonnet/low` (and ~10× `claude-fable-5/low`) and
+  3–4× the wall-clock, in every epoch, for the same quality. On a flat
   subscription (where the real budgets are time and rate-limit headroom),
   haiku's cheapness is a **pricing illusion**. This materially revises the
   earlier USD-only "haiku wins" frontier readings.
-- **Latency frontier: `sonnet/low`** (16.2 s, $0.057) — the all-round pick, and
-  further support for the spend-audit "default sonnet" rule.
-- **Token frontier: `claude-fable-5/low`** — the fewest output tokens of *any*
-  config (998), consistent with Anthropic's "lower effort on Claude 5 rivals
-  prior models" claim on the efficiency side (per-dollar it is pricier).
+- **Latency axis: `sonnet/low`** (16.2 s [13.3–18.8], $0.057) — the all-round
+  pick, and further support for the spend-audit "default sonnet" rule.
+- **Token axis: `claude-fable-5/low`** — the fewest output tokens of *any*
+  config (998 [868–1,152]), consistent with Anthropic's "lower effort on
+  Claude 5 rivals prior models" claim on the efficiency side (per-dollar it is
+  pricier). Scope note: the token axis is **output tokens** — a deliberate
+  proxy for effort/headroom; input and cache tokens are persisted but feed no
+  axis yet, so "rate-limit headroom" is measured only to the extent output
+  tokens drive it.
 - **Effort helps at the floor, not the top:** `haiku/low → high` = 0.667 →
   1.000, while `fable/max` = 2.2× `fable/low` cost for +0.000 — the
   overthinking-paper shape, reproduced in-house.
 - `ablation advise --reflex opus/max` correctly fell back to `opus/xhigh` (the
   new effort ordering, exercised live) and recommends `haiku/high` for 2.3×
   saving — *if dollars are your budget*; on latency it costs you 30 s/cell.
-  The axis choice is now an explicit, first-class decision.
+  The axis choice is first-class in `report`/`plot` (`--x-axis`); `advise`
+  deliberately stays USD-based (recorded design decision).
 
 ## 6. Roadmap (economics-first order)
 
@@ -218,3 +241,35 @@ winner** — `--x-axis` is not cosmetic:
 5. Deferred, recorded: grid-load effort validation (§3), cost-of-failure
    asymmetry reporting (§4), and the T2 runway (unchanged, still blocked on the
    upstream flat-skill conversion).
+
+## Appendix — adversarial re-review of this audit (2026-07-06)
+
+This audit's own load-bearing hunks (`analyze.py` frontier/interval/schema code
+and the §5 winners table) went through the house 3-voice adversarial review
+(blind Claude + Codex + Gemini; anonymized refutation; tool-grounding). Codex
+timed out in round 1 and participated via the refutation round. Outcome:
+
+**The code survived; the §5 rhetoric didn't fully.** Fixed in place:
+per-epoch ranges added to the winners table + "crowns are within run variance
+at n=3" reframing (recompute showed `sonnet/low` cheaper than `haiku/high` in
+2/3 epochs); the token ratio corrected to ~6× vs `sonnet/low` (~10× is vs
+`fable/low`); the probe matrix rescoped to *acceptance, not application* (with
+the haiku/xhigh clamp evidence); the `advise` axis phrasing scoped; an
+absent-token-key old-ledger regression test added at the analyze layer; a NaN
+guard added to `_x_value` (a NaN-cost cell could otherwise sit spuriously on a
+frontier — unreachable via the harness's own writers, cheap to close).
+
+**Tool-refuted (recorded so they aren't re-raised):** "DuckDB rejects unquoted
+struct keys in `read_json(columns=…)`" — the exact literal executes fine;
+"unmeasured cost falls back to 0.0 and dominates" — no such path (NULL → NaN,
+whose comparisons are all false; hence the guard above, closing the corrected
+form). "KEEP_FIELDS not updated" was a review-payload truncation artifact.
+
+**Recorded, not changed:** the frontier compares cells across *variants* within
+a task (pre-existing semantics, meaningful only on multi-variant ledgers);
+`plot.pareto_scatter` trusts the caller to pass cells Pareto-marked on the same
+axis (the CLI threads this correctly; library misuse is possible — docstring
+contract); `ts` is ordered as VARCHAR in the dedupe window (safe today — every
+ledger row uses one uniform `+00:00` format); a column omitted from
+`_LEDGER_COLUMNS` is silently invisible to `SELECT *` consumers (explicit
+SELECTs fail loud).

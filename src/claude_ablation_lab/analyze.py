@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -262,9 +263,17 @@ X_AXES: dict[str, str] = {
 
 
 def _x_value(cell: ReportCell, x_axis: str) -> float | None:
-    """The cell's position on the chosen cost axis (``None``: not measured)."""
+    """The cell's position on the chosen cost axis (``None``: not measured).
+
+    NaN is normalized to ``None``: a NaN x compares false against everything, so
+    without this a cell whose cost/latency was null in the ledger (hand-edited —
+    the harness's own writers always populate them) would dodge every domination
+    test and sit spuriously *on* the frontier (adversarial re-review guard).
+    """
     value = getattr(cell, X_AXES[x_axis])
-    return None if value is None else float(value)
+    if value is None or math.isnan(value):
+        return None
+    return float(value)
 
 
 def report(ledger_path: Path | str, *, x_axis: str = "cost") -> list[ReportCell]:

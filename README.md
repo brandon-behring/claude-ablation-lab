@@ -163,19 +163,22 @@ its public mirror, so an un-sandboxed cell could `curl`/`cat` the gold and satur
 The audit added a **release-tracking grid** ([`grids/claude5-refresh.yaml`](grids/claude5-refresh.yaml)):
 re-run the same cheap probe (t8 hard-math) each model generation and watch the frontier move. The
 first run (39/39 cells, 13 configs incl. `claude-fable-5` and the new `xhigh` tier, ≈$4.7 equiv)
-landed one headline the USD-only frontier had been hiding — **each cost axis crowns a different
-winner** (`ablation plot --x-axis cost|latency|tokens`):
+landed one headline the USD-only frontier had been hiding — **the ranking is axis-dependent**
+(`ablation plot --x-axis cost|latency|tokens`). Point-estimate frontier winners at n = 3 (epoch
+ranges overlap between neighbours — the *crowns* are exploratory; the *axis-dependence* holds in
+every epoch):
 
-| axis (what it costs *you*) | Pareto winner | the catch |
+| axis (what it costs *you*) | point-estimate winner (n=3) | the catch |
 |---|---|---|
-| **$ (API-equivalent)** | `haiku/high` — $0.051 | …but 64 s and ~9,600 output tokens per cell |
-| **latency (wall-clock)** | `sonnet/low` — 16.2 s | at $0.057, 1,553 tokens — the all-round pick |
-| **output tokens (rate-limit headroom)** | `claude-fable-5/low` — **998 tokens** | fewest tokens of *any* config, 17.4 s — but $0.138 by API price |
+| **$ (API-equivalent)** | `haiku/high` — $0.051 [0.032–0.067] | …but 64 s and ~9,600 output tokens per cell — and `sonnet/low` was cheaper in 2 of 3 epochs |
+| **latency (wall-clock)** | `sonnet/low` — 16.2 s [13.3–18.8] | at $0.057, 1,553 tokens — the all-round pick |
+| **output tokens (headroom proxy)** | `claude-fable-5/low` — **998** [868–1,152] | fewest output tokens of *any* config, 17.4 s — but $0.138 by API price |
 
 ![t8 token frontier](docs/figures/t8_hard_math_pareto_tokens.png)
 
 On a flat subscription the real budgets are **time and rate-limit headroom**, not dollars — and on
-those axes haiku's "cheapness" is a pricing illusion: it burned 6–10× the tokens and 3–4× the
+those axes haiku's "cheapness" is a pricing illusion: it burned ~6× the tokens of `sonnet/low`
+(~10× of `claude-fable-5/low`) and 3–4× the
 wall-clock of `sonnet/low` for the same (saturated) quality, and its only quality slip in the whole
 sweep was `haiku/low` wandering off-task on one epoch (0.667, flagged `⚠1unp`). Two more notes:
 effort helped at the tier floor (`haiku/low → high` = 0.667 → 1.000) while at the top it only added

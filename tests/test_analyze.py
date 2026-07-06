@@ -607,3 +607,54 @@ def test_advise_surfaces_absolute_quality_and_epochs() -> None:
     [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
     assert row.rec_value == pytest.approx(0.90)
     assert row.n_epochs == 4
+
+
+@pytest.mark.unit
+def test_report_tolerates_ledger_rows_missing_token_keys_entirely(tmp_path) -> None:
+    # Every pre-2026-07-06 ledger row lacks the token KEYS (not null values — the
+    # LedgerRow writer always emits them, so this must be raw JSON): the explicit
+    # read_json schema must surface them as NULL, never error (adversarial
+    # re-review: this path was previously covered only by a manual smoke).
+    import json as _json
+
+    led = tmp_path / "old.jsonl"
+    row = {
+        "task_id": "t1",
+        "model": "haiku",
+        "effort": "low",
+        "variant": "none",
+        "epoch": 0,
+        "grader_version": "v1",
+        "run_id": "r0",
+        "run_status": "ok",
+        "grade_status": "ok",
+        "value": 0.8,
+        "cost_usd": 0.01,
+        "latency_s": 1.0,
+        "spec_sha": "S",
+        "subscores": "{}",
+        "ts": "2026-01-01",
+    }
+    led.write_text(_json.dumps(row) + "\n", encoding="utf-8")
+    [cell] = report(led)
+    assert cell.mean_value == pytest.approx(0.8)
+    assert cell.mean_cost == pytest.approx(0.01)
+    assert cell.mean_output_tokens is None
+    assert cell.mean_input_tokens is None
+    assert cell.n_token_epochs == 0
+
+
+@pytest.mark.unit
+def test_report_nan_cost_cell_is_never_pareto() -> None:
+    # A NaN x compares false against everything, so without the _x_value guard a
+    # null-cost cell (only reachable via a hand-edited ledger) would dodge every
+    # domination test and sit spuriously ON the frontier.
+    from dataclasses import replace as _replace
+
+    from claude_ablation_lab.analyze import _mark_pareto
+
+    nan_cell = _replace(_cell(model="haiku", effort="low", value=1.0), mean_cost=float("nan"))
+    real_cell = _cell(model="sonnet", effort="low", value=0.5, cost=0.05)
+    marked = {c.model: c for c in _mark_pareto([nan_cell, real_cell])}
+    assert marked["haiku"].pareto is False  # unmeasured x never wins a frontier
+    assert marked["sonnet"].pareto is True
