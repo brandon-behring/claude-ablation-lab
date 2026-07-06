@@ -6,7 +6,7 @@
 
 A personal **model × thinking-effort × config** ablation/regression harness for **Claude Code**, run headless against *your own* use cases.
 
-The goal is not to reproduce Anthropic's published base numbers — it's to measure how well Claude performs on **your tasks, inside your infrastructure**, so you can later prove whether a change to your `CLAUDE.md` / skills / MCP / prompts **actually helps** ("is the difference real?"). Inspired by the Anthropic talk *"Picking the right model"* (build a small private eval; optimize cheapest-per-*successful-outcome*; read your transcripts; separate infra failures from model failures).
+The mission is **model/effort selection economics**: measure — on *your* tasks, inside *your* infrastructure — which model × thinking-effort configs sit on the quality-vs-cost **Pareto frontier**, where the expensive reflex (opus/max) overpays, and where a cheaper config is provably safe. The goal is not to reproduce Anthropic's published base numbers. The same machinery also proves whether a change to your `CLAUDE.md` / skills / MCP / prompts **actually helps** ("is the difference real?") — that infra A/B capability exists to keep the economics measurement honest (hermetic cells, designed controls, exact verdicts). Inspired by the Anthropic talk *"Picking the right model"* (build a small private eval; optimize cheapest-per-*successful-outcome*; read your transcripts; separate infra failures from model failures); mission clarified by the [2026-07-06 independent audit](docs/audits/2026-07-06_independent-audit.md).
 
 ## How it works
 
