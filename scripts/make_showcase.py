@@ -32,11 +32,14 @@ def main() -> int:
         help="comma-separated task ids allowed in this publication (default: showcase tasks)",
     )
     args = parser.parse_args()
-    tasks = (
-        frozenset(t.strip() for t in args.tasks.split(",") if t.strip())
-        if args.tasks
-        else SHOWCASE_TASKS
-    )
+    if args.tasks is None:
+        tasks = SHOWCASE_TASKS
+    else:
+        tasks = frozenset(t.strip() for t in args.tasks.split(",") if t.strip())
+        if not tasks:
+            # An explicitly-empty allow-list would reject every row with a confusing
+            # "not in the allowed set []" — fail at the flag, where the mistake is.
+            parser.error("--tasks was given but named no task ids")
     count = sanitize_ledger(args.raw, args.out, tasks=tasks)
     print(f"wrote {count} sanitized rows → {args.out}")
     return 0

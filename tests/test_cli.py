@@ -98,6 +98,53 @@ def test_report_empty_ledger_message(tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_report_x_axis_flag_changes_frontier_and_legend(tmp_path) -> None:
+    # Cheap-but-slow vs pricey-but-fast at equal quality: the ★ flag must follow the
+    # requested axis (round-3 review: the report command previously had no --x-axis,
+    # so a latency frontier existed in the library but was invisible as a table).
+    led = tmp_path / "ledger.jsonl"
+    _ledger_row(led, run_id="a", model="haiku", value=1.0, cost_usd=0.01, latency_s=30.0)
+    _ledger_row(led, run_id="b", model="sonnet", value=1.0, cost_usd=0.05, latency_s=5.0)
+    result = cli.invoke(app, ["report", str(led), "--x-axis", "latency"])
+    assert result.exit_code == 0
+    # normalize: rich wraps at word boundaries, which must not split the phrase
+    assert "quality vs latency" in " ".join(result.stdout.split())
+    bogus = cli.invoke(app, ["report", str(led), "--x-axis", "bogus"])
+    assert bogus.exit_code == 2
+    assert "unsupported --x-axis" in bogus.stdout
+
+
+@pytest.mark.unit
+def test_fmt_tokens_renders_interval_and_partial_marker() -> None:
+    # The token epoch interval must render like cost/latency's, not be silently
+    # dropped (round-3 review). Tested on the formatter directly — the rich table
+    # truncates cells at narrow widths, which is presentation, not data.
+    from claude_ablation_lab.analyze import ReportCell
+    from claude_ablation_lab.cli.main import _fmt_tokens
+
+    cell = ReportCell(
+        task_id="t8",
+        model="haiku",
+        effort="low",
+        variant="none",
+        n_epochs=3,
+        n_spec=1,
+        mean_value=1.0,
+        sd_value=None,
+        mean_cost=0.05,
+        mean_latency=10.0,
+        ci_low=None,
+        ci_high=None,
+        shuffled_auroc=None,
+        mean_output_tokens=1000.0,
+        tokens_ci_low=800.0,
+        tokens_ci_high=1200.0,
+        n_token_epochs=2,
+    )
+    assert _fmt_tokens(cell) == "1000 [800,1200] (2/3)"
+
+
+@pytest.mark.unit
 def test_compare_renders_or_reports_no_overlap(tmp_path) -> None:
     led = tmp_path / "ledger.jsonl"
     _ledger_row(led, run_id="x", task_id="t2", variant="repo@a", value=0.5)

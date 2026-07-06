@@ -21,6 +21,7 @@ once and stamped on every row.
 from __future__ import annotations
 
 import logging
+import math
 import os
 import tempfile
 import time
@@ -292,9 +293,17 @@ def _usage_token(usage: dict[str, object] | None, key: str) -> int | None:
     reports ``0`` keeps its honest 0 (e.g. a rate-limited cell), while a payload
     missing the key entirely (old CLI, unexpected shape) yields ``None`` so the
     ledger never fabricates a count (the ``tool_calls`` None-vs-{} rule).
+    A value that cannot BE a count — bool, non-numeric, negative, non-integral,
+    or non-finite (``json.loads`` accepts a literal ``NaN``, and ``int(nan)``
+    would raise mid-sweep, uncaught) — is also not-measured, never truncated or
+    crashed on (round-3 adversarial review).
     """
     value = (usage or {}).get(key)
     if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if isinstance(value, float) and (not math.isfinite(value) or value != int(value)):
+        return None
+    if value < 0:
         return None
     return int(value)
 
@@ -317,6 +326,18 @@ def _build_row(
     details: dict[str, object] = dict(score.details)
     if extra_details:
         details.update(extra_details)
+    in_tok = _usage_token(run_result.usage, "input_tokens")
+    out_tok = _usage_token(run_result.usage, "output_tokens")
+    cache_read = _usage_token(run_result.usage, "cache_read_input_tokens")
+    cache_create = _usage_token(run_result.usage, "cache_creation_input_tokens")
+    if run_result.usage and (in_tok, out_tok, cache_read, cache_create) == (None,) * 4:
+        # A non-empty usage payload yielding zero recognized counts means the CLI
+        # renamed its usage keys: the token axis would quietly empty (every cell
+        # "not measured") with nothing failing. Keys only — values may be anything.
+        logger.warning(
+            "usage payload carries no recognized token keys (CLI shape drift?): %s",
+            sorted(run_result.usage),
+        )
     return LedgerRow(
         task_id=cell.task_id,
         model=cell.model,
@@ -353,10 +374,10 @@ def _build_row(
         tool_calls=(
             dict(Counter(run_result.tools_used)) if run_result.tools_used is not None else None
         ),
-        input_tokens=_usage_token(run_result.usage, "input_tokens"),
-        output_tokens=_usage_token(run_result.usage, "output_tokens"),
-        cache_read_tokens=_usage_token(run_result.usage, "cache_read_input_tokens"),
-        cache_creation_tokens=_usage_token(run_result.usage, "cache_creation_input_tokens"),
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+        cache_read_tokens=cache_read,
+        cache_creation_tokens=cache_create,
     )
 
 

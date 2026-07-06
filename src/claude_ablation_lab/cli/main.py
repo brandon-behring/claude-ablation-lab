@@ -240,15 +240,26 @@ def estimate(
 @app.command()
 def report(
     ledger: Annotated[Path, typer.Argument(help="JSONL ledger to analyze")],
+    x_axis: Annotated[
+        str,
+        typer.Option(
+            "--x-axis",
+            help="Pareto cost axis for the ★ flag: cost ($) / latency (s) / tokens (output tokens)",
+        ),
+    ] = "cost",
 ) -> None:
     """DuckDB aggregates per task×model×effort: score±CI, cost, latency, Pareto."""
+    from claude_ablation_lab.analyze import X_AXES
     from claude_ablation_lab.analyze import report as run_report
 
-    cells = run_report(ledger)
+    if x_axis not in X_AXES:
+        console.print(f"[red]unsupported --x-axis {x_axis!r}[/red] (choose {'/'.join(X_AXES)})")
+        raise typer.Exit(2)
+    cells = run_report(ledger, x_axis=x_axis)
     if not cells:
         console.print(f"[yellow]no graded rows in {ledger}[/yellow]")
         return
-    _print_report(cells)
+    _print_report(cells, x_axis=x_axis)
 
 
 @app.command()
@@ -419,18 +430,22 @@ def _with_interval(mean: float, lo: float | None, hi: float | None, places: int)
 
 
 def _fmt_tokens(c) -> str:  # type: ignore[no-untyped-def]
-    """Mean output tokens; a mixed-era ledger shows the measured denominator."""
+    """Mean output tokens with its epoch interval; mixed-era shows the denominator."""
     if c.mean_output_tokens is None:
         return "—"
     base = f"{c.mean_output_tokens:.0f}"
+    if c.tokens_ci_low is not None and c.tokens_ci_high is not None:
+        # Same interval treatment as cost/latency — the tokens axis must not be the
+        # one column whose computed uncertainty is silently dropped (round-3 review).
+        base += f" [{c.tokens_ci_low:.0f},{c.tokens_ci_high:.0f}]"
     if c.n_token_epochs < c.n_epochs:  # partial coverage must be visible
         base += f" ({c.n_token_epochs}/{c.n_epochs})"
     return base
 
 
-def _print_report(cells: list) -> None:  # type: ignore[type-arg]
+def _print_report(cells: list, *, x_axis: str = "cost") -> None:  # type: ignore[type-arg]
     """Render report cells: quality (±epoch CI), cost, latency, tokens, Pareto, leakage."""
-    table = Table(title="report — quality vs cost (epochs = exploratory run-variance)")
+    table = Table(title=f"report — quality vs {x_axis} (epochs = exploratory run-variance)")
     for col in (
         "task",
         "model",
@@ -473,7 +488,7 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
         )
     console.print(table)
     console.print(
-        "★ = Pareto-optimal (quality vs cost) · ⚠LEAK = shuffled-label self-test off 0.5 · "
+        f"★ = Pareto-optimal (quality vs {x_axis}) · ⚠LEAK = shuffled-label self-test off 0.5 · "
         "⚠SPEC = cell mixes task specs · ⚠VER = cell mixes grader versions · "
         "⚠Nunp = N unparseable epochs counted as honest 0.0 · "
         "every [lo,hi] at <5 epochs is the min–max epoch range, not a 95% CI · "

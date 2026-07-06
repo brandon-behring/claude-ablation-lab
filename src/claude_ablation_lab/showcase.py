@@ -1,10 +1,12 @@
-"""Sanitize a showcase ledger for publication.
+"""Sanitize a ledger for publication.
 
 The raw ledger is a local artifact: its rows embed absolute paths
 (``output_path``/``transcript_path``), output previews, session ids, and host
 provenance (``mcp_servers``/``global_layer``) that have no place in a public repo.
-This module produces the committed ``results/showcase.jsonl``: showcase tasks only,
-only ``KEEP_FIELDS`` survive (an allow-list — a field not on it is excluded by
+This module produces every committed ledger — ``results/showcase.jsonl`` and the
+dated release snapshots (``results/claude5-refresh-*.jsonl``): only the task ids
+named per publication run (``tasks``, default the showcase set) are admitted, only
+``KEEP_FIELDS`` survive (an allow-list — a field not on it is excluded by
 default, not published-unless-remembered), then a paranoid final scan — any
 absolute-path fragment or oversized string anywhere in a kept row is a hard error,
 never a warning. Failure rows (``rate_limited``/``timeout``/…) are kept: METHODOLOGY
