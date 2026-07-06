@@ -1,0 +1,35 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; latex_guide family).
+# Topic (Medusa/EAGLE draft heads) verified ABSENT from the references (grep 2026-07-06).
+id: t9_draft_heads
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, latex-guide]
+prompt: |
+  You are writing for Volume 8 (LLM Foundations) of a CFA-style data-science
+  interview-prep series. The inference-optimization chapter covers classical
+  speculative decoding with a separate draft model; write the NEW follow-on
+  section titled "Multi-Token Draft Architectures: Medusa and EAGLE". Cover:
+  - why a separate draft model is operationally costly and what attaching draft
+    heads to the target model changes;
+  - Medusa's parallel decoding heads + tree attention, and EAGLE's
+    feature-level autoregression, including acceptance-rate trade-offs;
+  - how to reason about speedup as a function of acceptance rate and head count,
+    with a small worked numeric example.
+  Match the volume's established voice and conventions exactly as demonstrated in
+  the reference material below: \los{ID}{bloom-verb}{statement} learning outcomes
+  (at least 2, with new IDs continuing the chapter's scheme), \companytags{...},
+  Tufte margin notes (\marginnote) or an interviewcontext box, biblatex citations
+  (\textcite/\autocite), and LaTeX sectioning. Target 900-1400 words. Return ONLY
+  the LaTeX source of the section — no preamble, no commentary before or after.
+params:
+  corpus_family: latex_guide
+  max_reference_chars: 6000
+  reference_files:
+    - ~/interview_prep_series/vol08_llm_foundations/chapters/06_inference_optimization.tex
+    - ~/interview_prep_series/vol08_llm_foundations/chapters/13_cost_optimization.tex
+gold:
+  family: latex_guide
+  min_los: 2

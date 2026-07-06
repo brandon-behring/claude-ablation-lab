@@ -1,0 +1,13 @@
+# judge-pilot — the 4 contestant configs for the LLM-judge pairwise phase
+# (docs/plans/active/2026-07-06_llm-judge-phase.md). The cross product is restricted
+# to exactly {sonnet/high, opus/high, fable/low, fable/high} via effort_support.
+# Epochs=2: epochs feed within-prompt stability + the tie rate, not sign-flip power
+# (power comes from the 10 prompts = 10 tasks).
+models: [sonnet, opus, claude-fable-5]
+efforts: [low, high]
+variants: [none]
+epochs: 2
+effort_support:
+  sonnet: [high]
+  opus: [high]
+  claude-fable-5: [low, high]

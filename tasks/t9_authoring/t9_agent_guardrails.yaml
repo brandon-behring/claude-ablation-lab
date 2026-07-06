@@ -1,0 +1,35 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; latex_guide family).
+# Topic (guardrails/output validation) verified ABSENT from the module reference
+# (grep 2026-07-06: 1 passing mention elsewhere in the guide).
+id: t9_agent_guardrails
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, latex-guide]
+prompt: |
+  You are writing for a module-based LaTeX study guide of "Hugging Face in Action"
+  (Manning). Module 9 covers programming agents; write the NEW follow-on section
+  titled "Guardrails and Output Validation for Agent Pipelines" in the same module
+  style. Cover:
+  - the failure taxonomy guardrails address (malformed tool arguments, unsafe
+    actions, off-task loops) and where validation sits in the agent loop;
+  - schema-validated structured outputs vs post-hoc output parsing, with retry
+    and fallback policy;
+  - a "what they're really testing" interview framing: guardrails as separating
+    model failure from system failure.
+  Match the guide's established voice and conventions exactly as demonstrated in
+  the reference material below: \los{ID}{bloom-verb}{statement} learning outcomes
+  (at least 2, continuing the HFA-9.x scheme), \companytags{...}, a
+  narrativebox/interviewcontext apparatus or margin notes, biblatex citations
+  (\textcite/\autocite), and LaTeX sectioning. Target 900-1400 words. Return ONLY
+  the LaTeX source of the section — no preamble, no commentary before or after.
+params:
+  corpus_family: latex_guide
+  max_reference_chars: 8000
+  reference_files:
+    - ~/guides-manning/ai-engineering-and-llm-apps/manning_hugging_face_in_action/guide/chapters/09_m9_programming_agents.tex
+gold:
+  family: latex_guide
+  min_los: 2

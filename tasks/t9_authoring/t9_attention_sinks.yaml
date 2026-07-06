@@ -1,0 +1,35 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; latex_guide family).
+# Topic (attention sinks / StreamingLLM) verified ABSENT from the references (grep 2026-07-06).
+id: t9_attention_sinks
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, latex-guide]
+prompt: |
+  You are writing for Volume 8 (LLM Foundations) of a CFA-style data-science
+  interview-prep series. Write a NEW section titled "Attention Sinks and
+  StreamingLLM: Serving Beyond the Context Window" that the volume does not yet
+  have. Cover:
+  - the attention-sink phenomenon (why initial tokens absorb disproportionate
+    attention mass, and what softmax normalization has to do with it);
+  - why naive sliding-window KV eviction collapses perplexity and how keeping
+    sink tokens + a rolling window (StreamingLLM) fixes it;
+  - what this does and does not buy in production serving (streaming length vs
+    true long-context understanding), framed for an interview answer.
+  Match the volume's established voice and conventions exactly as demonstrated in
+  the reference material below: \los{ID}{bloom-verb}{statement} learning outcomes
+  (at least 2, with new IDs continuing the chapter's scheme), \companytags{...},
+  Tufte margin notes (\marginnote) or an interviewcontext box, biblatex citations
+  (\textcite/\autocite), and LaTeX sectioning. Target 900-1400 words. Return ONLY
+  the LaTeX source of the section — no preamble, no commentary before or after.
+params:
+  corpus_family: latex_guide
+  max_reference_chars: 6000
+  reference_files:
+    - ~/interview_prep_series/vol08_llm_foundations/chapters/06_inference_optimization.tex
+    - ~/interview_prep_series/vol08_llm_foundations/chapters/01_transformer_architecture.tex
+gold:
+  family: latex_guide
+  min_los: 2
