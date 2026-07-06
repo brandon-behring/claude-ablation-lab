@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+
+import numpy as np
 import pytest
 
 from claude_ablation_lab.analyze import ReportCell, compare, cost_advisor, report
@@ -30,6 +33,8 @@ def _row(
     spec="S",
     run_status="ok",
     grade_status="ok",
+    in_tok=None,
+    out_tok=None,
 ) -> None:
     append_row(
         led,
@@ -55,6 +60,8 @@ def _row(
             details={},
             output_path=None,
             ts=ts,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         ),
     )
 
@@ -95,6 +102,134 @@ def test_report_marks_pareto_frontier(tmp_path) -> None:
     cells = {c.model: c for c in report(led)}
     assert cells["opus"].pareto is True
     assert cells["haiku"].pareto is False
+
+
+@pytest.mark.unit
+def test_report_token_stats_partial_coverage(tmp_path) -> None:
+    # Mixed-era ledger: one epoch measured tokens, one predates them. Token stats
+    # cover only the measured subset and say so via n_token_epochs.
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="new", epoch=0, in_tok=100, out_tok=800)
+    _row(led, rid="old", epoch=1)
+    [cell] = report(led)
+    assert cell.n_epochs == 2
+    assert cell.n_token_epochs == 1
+    assert cell.mean_input_tokens == pytest.approx(100.0)
+    assert cell.mean_output_tokens == pytest.approx(800.0)
+
+
+@pytest.mark.unit
+def test_report_no_token_rows_reads_none_not_zero(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="r0")  # a pre-token row: unmeasured must stay None, never 0
+    [cell] = report(led)
+    assert cell.mean_output_tokens is None
+    assert cell.mean_input_tokens is None
+    assert cell.n_token_epochs == 0
+
+
+@pytest.mark.unit
+def test_report_cost_latency_intervals_share_the_epoch_gate(tmp_path) -> None:
+    pytest.importorskip("eval_toolkit")
+    led = tmp_path / "l.jsonl"
+    for i, (c, lt) in enumerate([(0.01, 1.0), (0.02, 2.0), (0.03, 3.0)]):
+        _row(led, rid=f"e{i}", epoch=i, cost=c, lat=lt)
+    [cell] = report(led)
+    # Same estimator and gate as the quality interval: present at 3 epochs, bounded
+    # by the observed epoch range (at n=3 it degenerates toward min–max).
+    assert cell.cost_ci_low is not None and cell.cost_ci_high is not None
+    assert 0.01 <= cell.cost_ci_low <= cell.cost_ci_high <= 0.03
+    assert cell.latency_ci_low is not None and cell.latency_ci_high is not None
+    assert 1.0 <= cell.latency_ci_low <= cell.latency_ci_high <= 3.0
+
+
+@pytest.mark.unit
+def test_report_no_cost_interval_below_epoch_gate(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="r0", epoch=0)
+    _row(led, rid="r1", epoch=1)
+    [cell] = report(led)
+    assert cell.cost_ci_low is None and cell.latency_ci_low is None
+
+
+@pytest.mark.unit
+def test_report_latency_frontier_differs_from_cost_frontier(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    # Cheap-but-slow vs pricey-but-fast at equal quality: each owns one axis, which
+    # is the whole point of a selectable frontier (subscription cost ≈ wall-clock).
+    _row(led, rid="a", model="haiku", value=1.0, cost=0.01, lat=30.0)
+    _row(led, rid="b", model="sonnet", value=1.0, cost=0.05, lat=5.0)
+    cost_front = {c.model for c in report(led, x_axis="cost") if c.pareto}
+    lat_front = {c.model for c in report(led, x_axis="latency") if c.pareto}
+    assert cost_front == {"haiku"}
+    assert lat_front == {"sonnet"}
+
+
+@pytest.mark.unit
+def test_report_token_axis_unmeasured_cell_never_pareto_never_dominates(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="a", model="haiku", value=0.5, out_tok=500)
+    _row(led, rid="b", model="opus", value=1.0)  # higher quality but unmeasured tokens
+    cells = {c.model: c for c in report(led, x_axis="tokens")}
+    # The unmeasured cell sits off the token frontier (unknown ≠ free) — and it must
+    # not dominate the measured one despite its higher quality.
+    assert cells["opus"].pareto is False
+    assert cells["haiku"].pareto is True
+
+
+@pytest.mark.unit
+def test_report_token_axis_partial_coverage_never_pareto_never_dominates(tmp_path) -> None:
+    # Mixed-era cell: 2 epochs, only 1 measured tokens. Its token mean is a partial
+    # denominator — letting it compete would let a partially-unknown cost read as
+    # measured (PR-wide review, F1). It must sit off the token frontier AND not
+    # dominate, while staying visible for display (mean + n_token_epochs).
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="m0", model="haiku", epoch=0, value=1.0, out_tok=100)
+    _row(led, rid="m1", model="haiku", epoch=1, value=1.0)  # pre-token epoch
+    _row(led, rid="f0", model="sonnet", epoch=0, value=0.9, out_tok=900)
+    cells = {c.model: c for c in report(led, x_axis="tokens")}
+    assert cells["haiku"].n_token_epochs == 1 and cells["haiku"].n_epochs == 2
+    assert cells["haiku"].mean_output_tokens == pytest.approx(100.0)  # display survives
+    assert cells["haiku"].pareto is False
+    # sonnet is fully measured (1/1) — it must win despite haiku's cheaper partial mean.
+    assert cells["sonnet"].pareto is True
+
+
+@pytest.mark.unit
+def test_bootstrap_missing_warns_once_not_per_call(monkeypatch, caplog) -> None:
+    import sys
+
+    from claude_ablation_lab.analyze import _bootstrap_fn, _epoch_interval
+
+    # Force the ImportError even when eval_toolkit is installed (None in sys.modules
+    # makes `from eval_toolkit.bootstrap import ...` raise), and clear the cache on
+    # both sides so this test neither sees nor leaves a poisoned loader.
+    _bootstrap_fn.cache_clear()
+    monkeypatch.setitem(sys.modules, "eval_toolkit.bootstrap", None)
+    try:
+        with caplog.at_level(logging.WARNING, logger="claude_ablation_lab.analyze"):
+            assert _epoch_interval(np.array([1.0, 2.0, 3.0])) == (None, None)
+            assert _epoch_interval(np.array([4.0, 5.0, 6.0])) == (None, None)
+        warnings = [r for r in caplog.records if "eval_toolkit missing" in r.message]
+        assert len(warnings) == 1  # once per process, not once per axis per cell
+    finally:
+        _bootstrap_fn.cache_clear()
+
+
+@pytest.mark.unit
+def test_plot_axis_spec_mirrors_analyze_x_axes() -> None:
+    # Drift canary: the plot's per-axis metadata and the frontier's axis registry
+    # must stay in sync — adding an axis to one module without the other fails here.
+    from claude_ablation_lab import plot
+    from claude_ablation_lab.analyze import X_AXES
+
+    assert set(plot._X_AXIS_SPEC) == set(X_AXES)
+
+
+@pytest.mark.unit
+def test_report_rejects_unknown_x_axis(tmp_path) -> None:
+    with pytest.raises(ValueError, match="x_axis"):
+        report(tmp_path / "missing.jsonl", x_axis="bogus")
 
 
 @pytest.mark.unit
@@ -323,6 +458,20 @@ def test_advise_recommends_cheapest_on_quality_tie() -> None:
 
 
 @pytest.mark.unit
+def test_advise_reflex_fallback_ranks_xhigh_above_high() -> None:
+    # An absent reflex (opus/max) falls back to the model's HIGHEST effort that ran —
+    # which must be xhigh, not high, on a Claude-5-era grid (effort-order fix).
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.08),
+        _cell(model="opus", effort="xhigh", value=1.0, cost=0.12),
+        _cell(model="haiku", effort="low", value=1.0, cost=0.01),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/max", margin=0.02)
+    assert (row.reflex_model, row.reflex_effort) == ("opus", "xhigh")
+    assert row.reflex_fallback is True
+
+
+@pytest.mark.unit
 def test_advise_respects_margin_boundary() -> None:
     # haiku is 0.01 below reflex (inside δ=0.02); sonnet is 0.10 below (outside) yet cheaper.
     cells = [
@@ -510,3 +659,54 @@ def test_advise_surfaces_absolute_quality_and_epochs() -> None:
     [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
     assert row.rec_value == pytest.approx(0.90)
     assert row.n_epochs == 4
+
+
+@pytest.mark.unit
+def test_report_tolerates_ledger_rows_missing_token_keys_entirely(tmp_path) -> None:
+    # Every pre-2026-07-06 ledger row lacks the token KEYS (not null values — the
+    # LedgerRow writer always emits them, so this must be raw JSON): the explicit
+    # read_json schema must surface them as NULL, never error (adversarial
+    # re-review: this path was previously covered only by a manual smoke).
+    import json as _json
+
+    led = tmp_path / "old.jsonl"
+    row = {
+        "task_id": "t1",
+        "model": "haiku",
+        "effort": "low",
+        "variant": "none",
+        "epoch": 0,
+        "grader_version": "v1",
+        "run_id": "r0",
+        "run_status": "ok",
+        "grade_status": "ok",
+        "value": 0.8,
+        "cost_usd": 0.01,
+        "latency_s": 1.0,
+        "spec_sha": "S",
+        "subscores": "{}",
+        "ts": "2026-01-01",
+    }
+    led.write_text(_json.dumps(row) + "\n", encoding="utf-8")
+    [cell] = report(led)
+    assert cell.mean_value == pytest.approx(0.8)
+    assert cell.mean_cost == pytest.approx(0.01)
+    assert cell.mean_output_tokens is None
+    assert cell.mean_input_tokens is None
+    assert cell.n_token_epochs == 0
+
+
+@pytest.mark.unit
+def test_report_nan_cost_cell_is_never_pareto() -> None:
+    # A NaN x compares false against everything, so without the _x_value guard a
+    # null-cost cell (only reachable via a hand-edited ledger) would dodge every
+    # domination test and sit spuriously ON the frontier.
+    from dataclasses import replace as _replace
+
+    from claude_ablation_lab.analyze import _mark_pareto
+
+    nan_cell = _replace(_cell(model="haiku", effort="low", value=1.0), mean_cost=float("nan"))
+    real_cell = _cell(model="sonnet", effort="low", value=0.5, cost=0.05)
+    marked = {c.model: c for c in _mark_pareto([nan_cell, real_cell])}
+    assert marked["haiku"].pareto is False  # unmeasured x never wins a frontier
+    assert marked["sonnet"].pareto is True

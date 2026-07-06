@@ -1,8 +1,8 @@
 # claude-ablation-lab — working conventions
 
-> Last updated: 2026-07-01
+> Last updated: 2026-07-06
 
-A personal **model × thinking-effort × config** ablation/regression harness for Claude Code. See [README.md](README.md). Build history: `experiments/log.txt` + per-phase reviews in `docs/design/`.
+A personal **model × thinking-effort × config** ablation/regression harness for Claude Code. **Mission (clarified by the 2026-07-06 audit): model/effort selection economics** — prove where cheaper configs are safe and where the expensive reflex earns its keep; the infra A/B machinery exists to make that measurement honest. See [README.md](README.md). Build history: `experiments/log.txt` + per-phase reviews in `docs/design/` + audits in `docs/audits/`.
 
 ## Grounding principles
 
@@ -22,7 +22,9 @@ Enforceable style is **config — the single source of truth** (`pyproject.toml`
 - Ledger rows keyed by `grader_version` (re-grade without re-running); `reset_clean` operates only on linked worktrees (`.git` is a file).
 - Coverage tiers: graders/stats 90%+, runner/worktree 80%+, CLI best-effort.
 
-## Current phase: DEVELOPMENT (build phases 0–6 complete; Phase C showcase pending)
+## Current phase: DEVELOPMENT (phases 0–6 complete; Phase C showcase SHIPPED 2026-07-02)
+
+Post-phase arc (not in the numbered phases): `advise` cost-frontier verdicts → the 2026-07-03 spend audit + t5/t6 `books-validate` (first discriminating task) → the 2026-07-04 pressure test (t7/t8, exact-match graders; **no opus edge on any checkable probe**) → the 2026-07-06 independent audit (Pareto plumbing: tokens persisted, cost/latency intervals, selectable frontier axis; `docs/audits/2026-07-06_independent-audit.md`). Next scheduled: the LLM-judge pairwise phase (`docs/plans/active/2026-07-06_llm-judge-phase.md`).
 
 **Hybrid rigor (decided):** correctness-critical code is Development-grade *from day 1*; orchestration was Exploration-loose until the loop was proven — now graduated (the run→grade→ledger→report loop is verified live end-to-end).
 
@@ -34,8 +36,8 @@ Enforceable style is **config — the single source of truth** (`pyproject.toml`
 
 | Checkpoint | Status |
 |------------|--------|
-| Leakage gate (T1 shuffled-label) | Operationalized (Phase 4 — flags at aggregation, `analyze.LEAKAGE_BAND`) |
-| Test coverage | ~93% (CI floor 90) |
+| Leakage gate (T1 shuffled-label) | Operationalized as a **metric-pipeline self-test** (Phase 4 — flags at aggregation, `analyze.LEAKAGE_BAND`; see the honest-scope note below) |
+| Test coverage | CI floor 90 (enforced; don't quote a point estimate this file can't verify) |
 | Pre-commit hooks | `make hooks` (ruff/black/mypy + gitleaks + detect-private-key) |
 
 ## Core principles
@@ -54,20 +56,20 @@ Shuffle the gold labels and re-grade — AUROC must collapse to ~0.5; a deviatio
 
 - **Runner** drives `claude -p --model <m> --effort <e> --output-format json --max-budget-usd <cap>` with `cwd` = the variant's worktree.
 - **Variant = `infra_repo@ref`**, materialized as a persistent `git worktree` per `(repo, ref)` (reused across the sweep). Infra-agnostic tasks set `infra_repo: null`.
-- **Grid** = tasks × valid `(model, effort)` pairs × variants × epochs. `max` effort is Opus-only; the validity matrix is probed empirically (Phase 1), not assumed.
+- **Grid** = tasks × valid `(model, effort)` pairs × variants × epochs. The validity matrix is probed empirically, not assumed — **re-probed 2026-07-06 on CLI 2.1.201: every alias (haiku/sonnet/opus/claude-fable-5) *accepts* every effort `low|medium|high|xhigh|max` (20/20 minimal cells ok)**, so `effort_support` is now a budget tool for accepted pairs — but acceptance ≠ *application*: whether a tier is honored is only observable behaviorally (haiku/xhigh ≈ haiku/high in the refresh data — likely silently clamped; Anthropic docs don't list xhigh for Haiku 4.5). ⚠ CLI footgun: an *unknown* effort value warns and silently runs at the default — never trust an effort label you didn't validate.
 - **Ledger** = append-only JSONL (resumable: skip completed cells) + `results/transcripts/<run_id>.json` sidecars.
 
 ## Project structure
 
 ```
-src/claude_ablation_lab/  runner.py worktree.py task.py t1_dataset.py prepare.py grade.py graders/ grid.py ledger.py orchestrate.py provenance.py analyze.py plot.py cli/main.py
-tasks/                    t1_prompt_injection.yaml t2_research_plan.yaml t3_verbatim_anchor.yaml t4_demo_infra.yaml
-grids/                    smoke.yaml v1.yaml showcase.yaml (models × efforts × variants × epochs)
-examples/demo-infra/      the public showcase A/B fixture (setup.sh → 2-ref repo)
+src/claude_ablation_lab/  runner.py worktree.py task.py t1_dataset.py prepare.py grade.py graders/ grid.py ledger.py orchestrate.py provenance.py analyze.py plot.py showcase.py cli/main.py
+tasks/                    t1_prompt_injection t2_research_plan t3_verbatim_anchor t4_demo_infra t5_books_validate t6_books_validate_agent t7_find_bug t8_hard_math (.yaml)
+grids/                    smoke v1 showcase books-pilot pressure-test claude5-refresh (.yaml)
+examples/                 demo-infra/ (showcase A/B fixture) books-validate/ (discriminating authoring probe)
 tests/                    conftest.py fixtures/ test_*.py
 experiments/log.txt       one-line experiment log
 docs/                     plans/active/ audits/ design/ METHODOLOGY.md
-results/  data/  .worktrees/   (gitignored)
+results/  data/  .worktrees/   (gitignored except results/showcase.jsonl + dated sanitized release snapshots, e.g. results/claude5-refresh-2026-07-06.jsonl)
 ```
 
 ## Key commands
@@ -92,6 +94,6 @@ Changes needed in `eval-toolkit` / `research_toolkit` → file a `consumer:claud
 
 ## Build phases
 
-0. ✅ Scaffold. 1. ✅ Runner + worktree. 1.5. ✅ Hardened run cell (per-cell worktree isolation, full subprocess envelope, catch-all → `infra_error`, robust JSON, worktree validation/lock, cell-contract test). 2. ✅ Graders (tested/90%+) keyed by `grader_version` (run/grade decoupled) + leakage gate. 3. ✅ Grid + JSONL ledger (provenance-stamped; orchestrator back-off/halt). 4. ✅ DuckDB report/compare (within-cell + across-epoch CIs; v1 exploratory). 5. ✅ `estimate` → smoke; the focused v1 sweep is user-driven. 6. ✅ Plotting (`ablation plot`) + anchor-strict grader + the public demo-infra A/B + a full-repo ship-review (exact sign-flip compare verdict, honest unparseable accounting — `docs/design/2026-07-01_comprehensive-review.md`). Deferred within 6: API adapter, probability-AUROC, book spinoff (`docs/design/2026-07-01_phase6-deferrals.md`).
+0. ✅ Scaffold. 1. ✅ Runner + worktree. 1.5. ✅ Hardened run cell (per-cell worktree isolation, full subprocess envelope, catch-all → `infra_error`, robust JSON, worktree validation/lock, cell-contract test). 2. ✅ Graders (tested/90%+) keyed by `grader_version` (run/grade decoupled) + leakage gate. 3. ✅ Grid + JSONL ledger (provenance-stamped; orchestrator back-off/halt). 4. ✅ DuckDB report/compare (within-cell + across-epoch CIs; v1 exploratory). 5. ✅ `estimate` → smoke; the focused v1 sweep is user-driven. 6. ✅ Plotting (`ablation plot`) + anchor-strict grader + the public demo-infra A/B + a full-repo ship-review (exact sign-flip compare verdict, honest unparseable accounting — `docs/design/2026-07-01_comprehensive-review.md`). Deferred within 6: API adapter, probability-AUROC, book spinoff (`docs/design/2026-07-01_phase6-deferrals.md`). **C. ✅ Public showcase run (2026-07-02).** Post-phase: `advise` → spend audit → books-validate → pressure test → **2026-07-06 independent audit** (token persistence, cost/latency intervals, `--x-axis` frontiers, claude5-refresh release grid). Next: LLM-judge pairwise phase (planned).
 
 > Roadmap refined 2026-06-25 after a 2-voice independent review — see `docs/design/2026-06-25_independent-review.md`.

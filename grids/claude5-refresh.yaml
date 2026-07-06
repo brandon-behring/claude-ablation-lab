@@ -1,0 +1,28 @@
+# claude5-refresh — the release-tracking grid (first used 2026-07-06, audit).
+#
+# Purpose: re-run the SAME cheap probe (t8 hard-math) each model generation and
+# watch the cost/latency/token frontier move. t8 is documented saturated for the
+# big models (2026-07-04 pressure test), so this grid tracks the COST axes, not
+# big-model quality movement — haiku slippage is the only expected quality signal.
+# It also directly tests Anthropic's claim that lower effort on Fable 5 rivals
+# prior models at xhigh, on the cost/latency side.
+#
+# Matrix re-probed live 2026-07-06 on CLI 2.1.201 (20/20 minimal cells `ok`):
+# every model alias below accepts every effort in low|medium|high|xhigh|max, so
+# there is no effort_support restriction. `medium` is dropped for budget (the
+# least informative tier: between two measured ones); `max` is kept on fable only
+# — it is already measured waste at n=5 for haiku/sonnet/opus (pressure test).
+#
+# 3 models × {low, high, xhigh} + fable × {low, high, xhigh, max} = 13 configs
+# × 3 epochs = 39 cells. `ablation estimate` before any run; resumable ledger at
+# results/claude5-refresh.jsonl.
+models: [haiku, sonnet, opus, claude-fable-5]
+efforts: [low, high, xhigh, max]
+variants: [none]
+epochs: 3
+
+effort_support:
+  haiku: [low, high, xhigh]
+  sonnet: [low, high, xhigh]
+  opus: [low, high, xhigh]
+  claude-fable-5: [low, high, xhigh, max]

@@ -1,10 +1,12 @@
-"""Sanitize a showcase ledger for publication.
+"""Sanitize a ledger for publication.
 
 The raw ledger is a local artifact: its rows embed absolute paths
 (``output_path``/``transcript_path``), output previews, session ids, and host
 provenance (``mcp_servers``/``global_layer``) that have no place in a public repo.
-This module produces the committed ``results/showcase.jsonl``: showcase tasks only,
-only ``KEEP_FIELDS`` survive (an allow-list — a field not on it is excluded by
+This module produces every committed ledger — ``results/showcase.jsonl`` and the
+dated release snapshots (``results/claude5-refresh-*.jsonl``): only the task ids
+named per publication run (``tasks``, default the showcase set) are admitted, only
+``KEEP_FIELDS`` survive (an allow-list — a field not on it is excluded by
 default, not published-unless-remembered), then a paranoid final scan — any
 absolute-path fragment or oversized string anywhere in a kept row is a hard error,
 never a warning. Failure rows (``rate_limited``/``timeout``/…) are kept: METHODOLOGY
@@ -65,6 +67,12 @@ KEEP_FIELDS: frozenset[str] = frozenset(
         "harness_sha",
         "infra_sha",
         "tool_calls",
+        # Token usage (native scalars, 2026-07-06): the token-denominated cost axis.
+        # Counts carry no prompt/output text, so they are safe to publish.
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
     }
 )
 
@@ -110,12 +118,18 @@ def _scan(value: Any, path: str) -> None:
             _scan(item, f"{path}[{i}]")
 
 
-def sanitize_row(row: dict[str, Any]) -> dict[str, Any]:
-    """Return the publishable form of one ledger row (raises on anything unexpected)."""
+def sanitize_row(row: dict[str, Any], *, tasks: frozenset[str] = SHOWCASE_TASKS) -> dict[str, Any]:
+    """Return the publishable form of one ledger row (raises on anything unexpected).
+
+    ``tasks`` is the explicit allow-list of task ids this publication run may
+    contain (default: the showcase tasks). Publishing any other ledger — e.g. the
+    claude5-refresh release snapshots — requires *naming* its tasks at the call
+    site: a foreign task id still means the wrong raw ledger was pointed here.
+    """
     task_id = row.get("task_id")
-    if task_id not in SHOWCASE_TASKS:
+    if task_id not in tasks:
         raise ValueError(
-            f"row for task {task_id!r} is not a showcase task {sorted(SHOWCASE_TASKS)} — "
+            f"row for task {task_id!r} is not in the allowed set {sorted(tasks)} — "
             "wrong raw ledger?"
         )
     kept = {key: value for key, value in row.items() if key in KEEP_FIELDS}
@@ -123,10 +137,12 @@ def sanitize_row(row: dict[str, Any]) -> dict[str, Any]:
     return kept
 
 
-def sanitize_ledger(raw_path: Path, out_path: Path) -> int:
+def sanitize_ledger(
+    raw_path: Path, out_path: Path, *, tasks: frozenset[str] = SHOWCASE_TASKS
+) -> int:
     """Sanitize ``raw_path`` → ``out_path``; returns the row count (must be > 0)."""
     with raw_path.open(encoding="utf-8") as handle:
-        rows = [sanitize_row(json.loads(line)) for line in handle if line.strip()]
+        rows = [sanitize_row(json.loads(line), tasks=tasks) for line in handle if line.strip()]
     if not rows:
         raise ValueError(f"{raw_path}: no rows — refusing to publish an empty ledger")
     out_path.parent.mkdir(parents=True, exist_ok=True)

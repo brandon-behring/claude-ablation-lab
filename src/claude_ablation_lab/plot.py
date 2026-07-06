@@ -23,6 +23,8 @@ matplotlib.use("Agg")  # headless: select before pyplot is imported
 import matplotlib.pyplot as plt  # noqa: E402  (must follow matplotlib.use)
 from matplotlib.lines import Line2D  # noqa: E402
 
+from claude_ablation_lab.analyze import x_value  # noqa: E402
+
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
@@ -31,9 +33,24 @@ if TYPE_CHECKING:
 __all__ = ["pareto_scatter", "effort_curves", "ab_forest", "render_all"]
 
 #: Deterministic effort ordering on the x-axis (unknown efforts sort last).
-_EFFORT_ORDER = {"low": 0, "high": 1, "max": 2}
+_EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
 #: Distinct markers per effort (cycled if a grid uses more effort levels).
 _EFFORT_MARKERS = ["o", "s", "^", "D", "v", "P"]
+
+#: Plot-only metadata per Pareto axis: (ci-low attr, ci-high attr, x label). The x
+#: positions and figure membership come from ``analyze.x_value`` — the same predicate
+#: that computes the ``pareto`` flag, so the frontier and the picture can never
+#: disagree on which cells compete (PR-wide review). Keys must mirror
+#: ``analyze.X_AXES``; a drift-canary test asserts the keysets match.
+_X_AXIS_SPEC = {
+    "cost": ("cost_ci_low", "cost_ci_high", "mean cost ($ / cell)"),
+    "latency": ("latency_ci_low", "latency_ci_high", "mean latency (s / cell)"),
+    "tokens": ("tokens_ci_low", "tokens_ci_high", "mean output tokens / cell"),
+}
+#: use a log x-scale when the (positive) x values span at least this ratio — wide
+#: cost ranges (haiku/low → opus/max is routinely >10×) squash to a left-edge blob
+#: on a linear axis (the Artificial-Analysis / compute-frontier convention).
+_LOG_X_RATIO = 10.0
 
 
 def _effort_rank(effort: str) -> tuple[int, str]:
@@ -46,17 +63,42 @@ def _slug(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name) or "task"
 
 
-def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
-    """Quality-vs-cost scatter for one task: colour = model, marker = effort, CI y-bars.
+def pareto_scatter(cells: list[ReportCell], *, task: str, x_axis: str = "cost") -> Figure:
+    """Quality-vs-x scatter for one task: colour = model, marker = effort, CI bars.
 
-    Pareto-frontier cells (``cell.pareto``) get a filled marker and a dashed frontier
-    line; leaky cells (``cell.leakage``) get a red ring. One error-bar container is
-    emitted per cell, so a test can assert ``len(ax.containers) == len(task_cells)``.
+    ``x_axis`` selects the cost dimension (``cost`` USD / ``latency`` seconds /
+    ``tokens`` output tokens) and must match the axis ``report(x_axis=...)`` marked
+    ``pareto`` against — the frontier flag is axis-specific. Pareto-frontier cells
+    get a filled marker and a dashed **staircase** frontier (the achievable-quality
+    envelope: between frontier points, the best attainable quality is the previous
+    point's); leaky cells (``cell.leakage``) get a red ring. Error bars are drawn on
+    both axes where intervals exist. Cells without a usable x (``analyze.x_value``
+    returns ``None``: unmeasured, NaN, or partial token coverage) are dropped from
+    the figure and counted in the title — the same predicate that decides frontier
+    membership, so figure and flag can never disagree.
+    One error-bar container is emitted per plotted cell, so a test can assert
+    ``len(ax.containers) == len(plotted_cells)``. A positive x-range wider than
+    ``_LOG_X_RATIO`` switches to a log x-scale.
     """
-    task_cells = [c for c in cells if c.task_id == task]
+    if x_axis not in _X_AXIS_SPEC:
+        raise ValueError(f"x_axis must be one of {sorted(_X_AXIS_SPEC)} (got {x_axis!r})")
+    xlo_attr, xhi_attr, x_label = _X_AXIS_SPEC[x_axis]
+    all_task_cells = [c for c in cells if c.task_id == task]
+    task_cells: list[ReportCell] = []
+    xs: list[float] = []
+    for c in all_task_cells:
+        x_pos = x_value(c, x_axis)
+        if x_pos is not None:
+            task_cells.append(c)
+            xs.append(x_pos)
+    n_unmeasured = len(all_task_cells) - len(task_cells)
     fig, ax = plt.subplots(figsize=(7, 5))
     if not task_cells:
-        ax.set_title(f"{task}: no cells")
+        ax.set_title(
+            f"{task}: no cells with a measured {x_axis} axis"
+            if all_task_cells
+            else f"{task}: no cells"
+        )
         return fig
     # One colour per (model, variant) series — a multi-variant ledger (the A/B showcase)
     # must not render two variants of one model indistinguishably (review consensus).
@@ -68,15 +110,22 @@ def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
     label_of = {s: s[0] if len(variants) == 1 else f"{s[0]} @ {s[1]}" for s in series}
     marker_of = {e: _EFFORT_MARKERS[i % len(_EFFORT_MARKERS)] for i, e in enumerate(efforts)}
 
-    for c in task_cells:
+    for c, x in zip(task_cells, xs, strict=True):
         yerr = None
         if c.ci_low is not None and c.ci_high is not None:
             yerr = [[c.mean_value - c.ci_low], [c.ci_high - c.mean_value]]
+        xerr = None
+        x_lo, x_hi = getattr(c, xlo_attr), getattr(c, xhi_attr)
+        if x_lo is not None and x_hi is not None:
+            # Clamped: matplotlib raises on a negative bar, and a percentile-bootstrap
+            # endpoint landing past the mean must degrade to a zero-length bar, not a crash.
+            xerr = [[max(0.0, x - x_lo)], [max(0.0, x_hi - x)]]
         key = (c.model, c.variant)
         ax.errorbar(
-            c.mean_cost,
+            x,
             c.mean_value,
             yerr=yerr,
+            xerr=xerr,
             marker=marker_of[c.effort],
             markersize=11 if c.pareto else 7,
             markerfacecolor=color_of[key] if c.pareto else "white",
@@ -90,7 +139,7 @@ def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
         )
         if c.leakage:
             ax.scatter(
-                [c.mean_cost],
+                [x],
                 [c.mean_value],
                 s=260,
                 facecolors="none",
@@ -99,17 +148,26 @@ def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
                 zorder=4,
             )
 
-    frontier = sorted((c for c in task_cells if c.pareto), key=lambda c: c.mean_cost)
+    # Staircase, not point-to-point: between frontier points the best *achievable*
+    # quality is the previous (cheaper) point's, so the envelope holds flat then
+    # steps up at each frontier cell (the leaderboard-scatter convention).
+    frontier = sorted(
+        ((x, c) for c, x in zip(task_cells, xs, strict=True) if c.pareto), key=lambda t: t[0]
+    )
     if len(frontier) >= 2:
-        ax.plot(
-            [c.mean_cost for c in frontier],
-            [c.mean_value for c in frontier],
+        ax.step(
+            [x for x, _ in frontier],
+            [c.mean_value for _, c in frontier],
+            where="post",
             linestyle="--",
             color="black",
             linewidth=1,
             alpha=0.5,
             zorder=2,
         )
+
+    if min(xs) > 0 and max(xs) / min(xs) >= _LOG_X_RATIO:
+        ax.set_xscale("log")
 
     series_handles = [
         Line2D([], [], marker="o", linestyle="none", color=color_of[s], label=label_of[s])
@@ -124,9 +182,10 @@ def pareto_scatter(cells: list[ReportCell], *, task: str) -> Figure:
         ax.legend(handles=series_handles, title=series_title, loc="lower right", fontsize=8)
     )
     ax.legend(handles=effort_handles, title="effort", loc="upper left", fontsize=8)
-    ax.set_xlabel("mean cost ($ / cell)")
+    ax.set_xlabel(x_label)
     ax.set_ylabel("mean quality")
-    ax.set_title(f"{task}: quality vs cost  (filled = Pareto · red ring = leakage)")
+    dropped = f" · {n_unmeasured} cell(s) lack {x_axis} data" if n_unmeasured else ""
+    ax.set_title(f"{task}: quality vs {x_axis}  (filled = Pareto · red ring = leakage){dropped}")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     return fig
@@ -213,14 +272,22 @@ def render_all(
     fmt: str = "png",
     a: str = "A",
     b: str = "B",
+    x_axis: str = "cost",
 ) -> list[Path]:
-    """Write a Pareto + effort figure per task and (if any) one A/B forest to ``out_dir``."""
+    """Write a Pareto + effort figure per task and (if any) one A/B forest to ``out_dir``.
+
+    ``x_axis`` (must match the axis ``cells`` were Pareto-marked against) selects the
+    Pareto figure's cost dimension. The default USD axis keeps its historical
+    ``<task>_pareto.<fmt>`` filename; other axes suffix it (``<task>_pareto_latency``)
+    so regenerating a different view never silently overwrites the cost figure.
+    """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    pareto_name = "pareto" if x_axis == "cost" else f"pareto_{x_axis}"
     written: list[Path] = []
     for task in sorted({c.task_id for c in cells}):
         for name, fig in (
-            ("pareto", pareto_scatter(cells, task=task)),
+            (pareto_name, pareto_scatter(cells, task=task, x_axis=x_axis)),
             ("effort", effort_curves(cells, task=task)),
         ):
             path = out / f"{_slug(task)}_{name}.{fmt}"

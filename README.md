@@ -6,7 +6,7 @@
 
 A personal **model × thinking-effort × config** ablation/regression harness for **Claude Code**, run headless against *your own* use cases.
 
-The goal is not to reproduce Anthropic's published base numbers — it's to measure how well Claude performs on **your tasks, inside your infrastructure**, so you can later prove whether a change to your `CLAUDE.md` / skills / MCP / prompts **actually helps** ("is the difference real?"). Inspired by the Anthropic talk *"Picking the right model"* (build a small private eval; optimize cheapest-per-*successful-outcome*; read your transcripts; separate infra failures from model failures).
+The mission is **model/effort selection economics**: measure — on *your* tasks, inside *your* infrastructure — which model × thinking-effort configs sit on the quality-vs-cost **Pareto frontier**, where the expensive reflex (opus/max) overpays, and where a cheaper config is provably safe. The goal is not to reproduce Anthropic's published base numbers. The same machinery also proves whether a change to your `CLAUDE.md` / skills / MCP / prompts **actually helps** ("is the difference real?") — that infra A/B capability exists to keep the economics measurement honest (hermetic cells, designed controls, exact verdicts). Inspired by the Anthropic talk *"Picking the right model"* (build a small private eval; optimize cheapest-per-*successful-outcome*; read your transcripts; separate infra failures from model failures); mission clarified by the [2026-07-06 independent audit](docs/audits/2026-07-06_independent-audit.md).
 
 ## How it works
 
@@ -157,6 +157,39 @@ shape-complete but **must not be run without an OS sandbox** (blocking network e
 access outside its worktree): it grants Bash, and the grade-time answer key lives in this repo and
 its public mirror, so an un-sandboxed cell could `curl`/`cat` the gold and saturate the task — a
 3-voice review finding, documented in `tasks/t6_books_validate_agent.yaml`.
+
+## The Claude-5 refresh — same grid, next generation (2026-07-06)
+
+The audit added a **release-tracking grid** ([`grids/claude5-refresh.yaml`](grids/claude5-refresh.yaml)):
+re-run the same cheap probe (t8 hard-math) each model generation and watch the frontier move. The
+first run (39/39 cells, 13 configs incl. `claude-fable-5` and the new `xhigh` tier, ≈$4.7 equiv)
+landed one headline the USD-only frontier had been hiding — **the ranking is axis-dependent**
+(`ablation plot --x-axis cost|latency|tokens`). Point-estimate frontier winners at n = 3 (epoch
+ranges overlap between neighbours — the *crowns* are exploratory; the *axis-dependence* holds in
+every epoch):
+
+| axis (what it costs *you*) | point-estimate winner (n=3) | the catch |
+|---|---|---|
+| **$ (API-equivalent)** | `haiku/high` — $0.051 [0.032–0.067] | …but 64 s and ~9,600 output tokens per cell — and `sonnet/low` was cheaper in 2 of 3 epochs |
+| **latency (wall-clock)** | `sonnet/low` — 16.2 s [13.3–18.8] | at $0.057, 1,553 tokens — the all-round pick |
+| **output tokens (headroom proxy)** | `claude-fable-5/low` — **998** [868–1,152] | fewest output tokens of *any* config, 17.4 s — but $0.138 by API price |
+
+![t8 token frontier](docs/figures/t8_hard_math_pareto_tokens.png)
+
+On a flat subscription the real budgets are **time and rate-limit headroom**, not dollars — and on
+those axes haiku's "cheapness" is a pricing illusion: it burned ~6× the tokens of `sonnet/low`
+(~10× of `claude-fable-5/low`) and 3–4× the
+wall-clock of `sonnet/low` for the same (saturated) quality, and its only quality slip in the whole
+sweep was `haiku/low` wandering off-task on one epoch (0.667, flagged `⚠1unp`). Two more notes:
+effort helped at the tier floor (`haiku/low → high` = 0.667 → 1.000) while at the top it only added
+cost (`fable/max` = 2.2× `fable/low` for +0.000 quality), and Fable 5 at **low** effort was the most
+token-efficient config in the sweep — consistent with Anthropic's claim that lower effort on the
+Claude 5 family rivals prior models. t8 stays saturated for sonnet/opus/fable, so this grid tracks
+the *cost* axes across releases; the quality question lives with the discriminating tasks. The
+sanitized run ledger is **committed** —
+[`results/claude5-refresh-2026-07-06.jsonl`](results/claude5-refresh-2026-07-06.jsonl) (39 rows,
+dated per generation; CI-guarded like the showcase ledger) — so this table and every figure above
+re-derive from the tree: `ablation report results/claude5-refresh-2026-07-06.jsonl --x-axis tokens`.
 
 ## Status
 
