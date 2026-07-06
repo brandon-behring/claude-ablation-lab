@@ -61,11 +61,14 @@ tier-discriminating looks narrow, and opus's value on open-ended work is
 | README quickstart claims Pareto/`advise` | true — but tokens were parsed and then **dropped** before the ledger (`orchestrate._build_row`), cost/latency had no uncertainty, and the frontier axis was hardcoded to USD | fixed — see §5 |
 
 Also recorded, not fixed (self-disclosed in the docs, worth keeping visible):
-- **Reproducibility gap:** only the showcase ledger is committed; the
-  books-validate and pressure-test numbers — including the load-bearing
-  "0 unparseable" that licenses the strict-exclude numeric grader — live in
-  gitignored ledgers. Inherent to the subscription-run design; flagged so nobody
-  mistakes the committed tree for a full reproduction kit.
+- **Reproducibility gap:** the books-validate and pressure-test numbers —
+  including the load-bearing "0 unparseable" that licenses the strict-exclude
+  numeric grader — live in gitignored ledgers. Inherent to the subscription-run
+  design; flagged so nobody mistakes the committed tree for a full reproduction
+  kit. *(Narrowed by the PR-wide re-review: this audit's own §5 numbers no
+  longer share the gap — the refresh ledger is committed as a sanitized dated
+  snapshot, `results/claude5-refresh-2026-07-06.jsonl`, CI-guarded like the
+  showcase ledger.)*
 - **CLI effort footgun (new finding, probe 2026-07-06):** `claude --effort
   <unknown-value>` **warns and silently runs at the default effort** rather than
   erroring — a typo'd effort in a grid would produce cells mislabeled with the
@@ -195,7 +198,9 @@ rule: never trust a point estimate):
 | `claude-fable-5/low` | 1.000 | 0.138 [0.103–0.199] | 17.4 [16.4–18.2] | 998 [868–1,152] ★tok |
 | `claude-fable-5/max` | 1.000 | 0.306 [0.235–0.347] | 48.5 [42.8–59.8] | 4,365 [3,617–5,655] |
 
-(7 of 13 rows shown; full ledger local.) The ★ point-estimate frontier winners
+(7 of 13 rows shown; the full sanitized ledger is **committed** —
+`results/claude5-refresh-2026-07-06.jsonl`, re-derive with `ablation report
+<snapshot> --x-axis cost|latency|tokens`.) The ★ point-estimate frontier winners
 differ per axis — but **the individual crowns are not separated beyond run
 variance**: `sonnet/low` was *cheaper than* `haiku/high` in 2 of 3 epochs (one
 $0.118 outlier epoch decides the USD crown), and the latency and token crowns'
@@ -273,3 +278,39 @@ contract); `ts` is ordered as VARCHAR in the dedupe window (safe today — every
 ledger row uses one uniform `+00:00` format); a column omitted from
 `_LEDGER_COLUMNS` is silently invisible to `SELECT *` consumers (explicit
 SELECTs fail loud).
+
+### Rounds 2–3: the PR-wide re-review and the omitted-files round (post-PR #17)
+
+After PR #17 opened, the same 3-voice protocol ran on the **whole PR diff**.
+The engine's payload cap kept the load-bearing subset (analyze/plot/tests/this
+doc/CLAUDE.md) and omitted 14 files — a partial round, stated as such. Outcome:
+no critical survived (Gemini re-raised the already-refuted `0.0`-fallback claim,
+this time with a fabricated code quote — the appendix above did its job), one
+verified warning + seven suggestions, all fixed (`fix(pareto)` commit): the
+**tokens frontier now requires full epoch coverage** (a mixed-era cell's
+partial-denominator mean no longer competes — the "unknown ≠ free" invariant,
+tightened), `x_value` is the single shared predicate for frontier *and* figure
+membership (NaN/partial cells are dropped-and-counted, never silently vanished),
+the axis registries are canary-tested in sync, the missing-eval_toolkit warning
+fires once per process, `_aggregate_cell` reads named rows instead of positional
+indices, and this audit's own §5 numbers became re-derivable from the tree via
+the sanitized dated snapshot (`results/claude5-refresh-2026-07-06.jsonl`,
+published through the sanitizer's new explicit per-task allow-list, pinned by
+`tests/test_published_refresh.py`).
+
+**Round 3** (user-requested) closed the coverage gap: the 14 omitted files were
+reviewed at their final PR state via a temp-worktree subset diff (full payload,
+no truncation). Codex timed out in round 1 and voted in refutation. Outcome: one
+verified warning — `_usage_token` accepted NaN/inf (a `json.loads` literal
+`NaN` would crash `_build_row` mid-sweep, uncaught) and silently truncated or
+kept negative/fractional "counts" — fixed to not-measured-`None` in all cases;
+plus five confirmed suggestions, all fixed (`fix(tokens)` commit): a CLI-shape
+drift warning when a non-empty `usage` payload yields zero recognized token
+keys, `ablation report --x-axis` (the table's ★ now follows the chosen axis —
+previously only `plot` had the flag), the token epoch interval rendered in the
+report table (it was computed and then dropped by exactly the column it
+described), an empty `--tasks` guard, and docstring scope fixes. Tool-refuted:
+Gemini's "truthy non-dict `usage` crashes `_usage_token`" critical —
+`runner.py` normalizes `usage` to `{}` on any non-dict, so the premise is
+unreachable (its second fabricated-premise critical across rounds; both are
+recorded here so they aren't re-raised).

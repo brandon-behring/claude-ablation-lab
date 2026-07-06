@@ -185,8 +185,11 @@ effort helped at the tier floor (`haiku/low → high` = 0.667 → 1.000) while a
 cost (`fable/max` = 2.2× `fable/low` for +0.000 quality), and Fable 5 at **low** effort was the most
 token-efficient config in the sweep — consistent with Anthropic's claim that lower effort on the
 Claude 5 family rivals prior models. t8 stays saturated for sonnet/opus/fable, so this grid tracks
-the *cost* axes across releases; the quality question lives with the discriminating tasks. Run
-ledger is local (`results/` is gitignored; the committed figures + this table are the record).
+the *cost* axes across releases; the quality question lives with the discriminating tasks. The
+sanitized run ledger is **committed** —
+[`results/claude5-refresh-2026-07-06.jsonl`](results/claude5-refresh-2026-07-06.jsonl) (39 rows,
+dated per generation; CI-guarded like the showcase ledger) — so this table and every figure above
+re-derive from the tree: `ablation report results/claude5-refresh-2026-07-06.jsonl --x-axis tokens`.
 
 ## Status
 

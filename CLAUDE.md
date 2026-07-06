@@ -69,7 +69,7 @@ examples/                 demo-infra/ (showcase A/B fixture) books-validate/ (di
 tests/                    conftest.py fixtures/ test_*.py
 experiments/log.txt       one-line experiment log
 docs/                     plans/active/ audits/ design/ METHODOLOGY.md
-results/  data/  .worktrees/   (gitignored except results/showcase.jsonl)
+results/  data/  .worktrees/   (gitignored except results/showcase.jsonl + dated sanitized release snapshots, e.g. results/claude5-refresh-2026-07-06.jsonl)
 ```
 
 ## Key commands
