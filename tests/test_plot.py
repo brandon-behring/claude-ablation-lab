@@ -26,6 +26,7 @@ def _cell(
     cost_ci: tuple[float, float] | None = None,
     lat_ci: tuple[float, float] | None = None,
     out_tok: float | None = None,
+    n_token_epochs: int | None = None,
     pareto: bool = False,
     leakage: bool = False,
     task: str = "t3",
@@ -55,7 +56,10 @@ def _cell(
         latency_ci_low=llo,
         latency_ci_high=lhi,
         mean_output_tokens=out_tok,
-        n_token_epochs=3 if out_tok is not None else 0,
+        # full coverage by default when measured; override for mixed-era cells
+        n_token_epochs=(
+            n_token_epochs if n_token_epochs is not None else (3 if out_tok is not None else 0)
+        ),
     )
 
 
@@ -140,6 +144,50 @@ def test_pareto_scatter_tokens_axis_drops_unmeasured_cells() -> None:
 def test_pareto_scatter_tokens_axis_all_unmeasured_is_safe() -> None:
     fig = plot.pareto_scatter([_cell("haiku", "low")], task="t3", x_axis="tokens")
     assert "no cells with a measured tokens axis" in fig.axes[0].get_title()
+
+
+@pytest.mark.unit
+def test_pareto_scatter_tokens_axis_drops_partial_coverage_cells() -> None:
+    # A mixed-era cell (tokens on 1 of 3 epochs) is off the token frontier by the
+    # analyze.x_value coverage gate — the figure must apply the SAME predicate, so
+    # the point is dropped and counted rather than plotted at its partial mean
+    # (PR-wide review, F1/F2: figure and flag must never disagree).
+    cells = [
+        _cell("haiku", "low", out_tok=500.0),
+        _cell("opus", "low", out_tok=300.0, n_token_epochs=1),  # partial: 1/3 epochs
+    ]
+    ax = plot.pareto_scatter(cells, task="t3", x_axis="tokens").axes[0]
+    assert len(ax.containers) == 1
+    assert "1 cell(s) lack tokens data" in ax.get_title()
+
+
+@pytest.mark.unit
+def test_pareto_scatter_nan_x_cell_is_dropped_and_counted() -> None:
+    # A NaN mean_cost (NULL-cost ledger row) is un-Pareto'd by analyze; the figure
+    # must drop it through the same x_value predicate — previously it was handed to
+    # matplotlib as x=NaN and silently vanished without being counted in the title.
+    from dataclasses import replace
+
+    cells = [
+        _cell("haiku", "low", cost=0.02),
+        replace(_cell("opus", "low"), mean_cost=float("nan")),
+    ]
+    ax = plot.pareto_scatter(cells, task="t3").axes[0]
+    assert len(ax.containers) == 1
+    assert "1 cell(s) lack cost data" in ax.get_title()
+
+
+@pytest.mark.unit
+def test_pareto_scatter_clamps_negative_xerr() -> None:
+    # A bootstrap endpoint past the mean (only constructible by hand) must degrade to
+    # a zero-length bar, not a matplotlib ValueError: ci low 0.03 > mean 0.02 would
+    # produce raw xerr −0.01 without the clamp.
+    cells = [
+        _cell("haiku", "low", cost=0.02, cost_ci=(0.03, 0.05)),
+        _cell("sonnet", "low", cost=0.04),
+    ]
+    ax = plot.pareto_scatter(cells, task="t3").axes[0]  # must not raise
+    assert len(ax.containers) == 2
 
 
 @pytest.mark.unit

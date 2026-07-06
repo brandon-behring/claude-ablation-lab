@@ -36,12 +36,14 @@ than silently averaged across different specs.
 
 from __future__ import annotations
 
+import functools
 import itertools
 import logging
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import duckdb
 import numpy as np
@@ -60,6 +62,7 @@ __all__ = [
     "cost_advisor",
     "LEAKAGE_BAND",
     "X_AXES",
+    "x_value",
 ]
 
 logger = logging.getLogger(__name__)
@@ -151,9 +154,11 @@ class ReportCell:
     latency_ci_low: float | None = None
     latency_ci_high: float | None = None
     #: Token means over the epochs that measured them (None: no epoch carried token
-    #: counts — every row predates 2026-07-06). The token cost axis is OUTPUT tokens:
-    #: on a flat subscription they are the honest spend/effort currency (2026-07-03
-    #: spend audit) and, unlike input+cache, they are what effort levels modulate.
+    #: counts — every row predates 2026-07-06). The token cost axis is OUTPUT tokens —
+    #: the effort/headroom proxy: unlike input+cache they are what effort levels
+    #: modulate. Input+cache tokens are the bulk of measured *spend* (2026-07-03 spend
+    #: audit: cache reads were the single largest component); they are persisted on
+    #: every row but feed no frontier axis yet.
     mean_input_tokens: float | None = None
     mean_output_tokens: float | None = None
     tokens_ci_low: float | None = None
@@ -262,14 +267,25 @@ X_AXES: dict[str, str] = {
 }
 
 
-def _x_value(cell: ReportCell, x_axis: str) -> float | None:
-    """The cell's position on the chosen cost axis (``None``: not measured).
+def x_value(cell: ReportCell, x_axis: str) -> float | None:
+    """The cell's position on the chosen cost axis (``None``: not usable as a cost).
 
-    NaN is normalized to ``None``: a NaN x compares false against everything, so
-    without this a cell whose cost/latency was null in the ledger (hand-edited —
-    the harness's own writers always populate them) would dodge every domination
-    test and sit spuriously *on* the frontier (adversarial re-review guard).
+    The single predicate for frontier membership AND figure membership
+    (``plot.pareto_scatter`` filters through it too), so "which cells compete"
+    can never disagree between the flag and the picture. Two normalization rules:
+
+    - NaN → ``None``: a NaN x compares false against everything, so without this a
+      cell whose cost/latency was null in the ledger (hand-edited — the harness's
+      own writers always populate them) would dodge every domination test and sit
+      spuriously *on* the frontier (adversarial re-review guard).
+    - Partial token coverage → ``None``: on the ``tokens`` axis a mixed-era cell
+      (``n_token_epochs < n_epochs``) has a mean over only the measured subset —
+      letting it compete would let a partially-unknown cost read as measured
+      (PR-wide review, F1). It stays visible in the report table with its
+      ``(n/N)`` marker; it just cannot sit on or shape the frontier.
     """
+    if x_axis == "tokens" and cell.n_token_epochs < cell.n_epochs:
+        return None
     value = getattr(cell, X_AXES[x_axis])
     if value is None or math.isnan(value):
         return None
@@ -302,16 +318,37 @@ def report(ledger_path: Path | str, *, x_axis: str = "cost") -> list[ReportCell]
     """
     con = _connect()
     try:
-        rows = con.execute(sql, [str(path)]).fetchall()
+        cur = con.execute(sql, [str(path)])
+        # Name the rows off the cursor description: downstream reads row["value"],
+        # never row[5] — a mid-SELECT insertion must not silently shift every field
+        # (PR-wide review, F5). strict= catches a description/row length mismatch.
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
     finally:
         con.close()
 
-    grouped: dict[tuple[str, str, str, str], list[tuple[Any, ...]]] = {}
+    grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for r in rows:
-        grouped.setdefault((r[0], r[1], r[2], r[3]), []).append(r)
+        grouped.setdefault((r["task_id"], r["model"], r["effort"], r["variant"]), []).append(r)
     cells = [_aggregate_cell(key, group) for key, group in grouped.items()]
     cells.sort(key=lambda c: (c.task_id, -c.mean_value))
     return _mark_pareto(cells, x_axis=x_axis)
+
+
+@functools.cache
+def _bootstrap_fn() -> Callable[..., Any] | None:
+    """The optional bootstrap estimator, or ``None`` (warned ONCE) when absent.
+
+    Cached so the intervals-omitted warning fires once per process, not once per
+    ``_epoch_interval`` call — which is 4× per cell (quality/cost/latency/tokens)
+    and would flood the logs on any real grid (PR-wide review, F4).
+    """
+    try:
+        from eval_toolkit.bootstrap import block_bootstrap_on_folds
+    except ImportError:  # optional stats dep absent → no intervals, not a crash
+        logger.warning("eval_toolkit missing — across-epoch intervals omitted")
+        return None
+    return cast("Callable[..., Any]", block_bootstrap_on_folds)
 
 
 def _epoch_interval(values: np.ndarray) -> tuple[float | None, float | None]:
@@ -324,22 +361,20 @@ def _epoch_interval(values: np.ndarray) -> tuple[float | None, float | None]:
     """
     if len(values) < MIN_EPOCHS_FOR_CI:
         return None, None
-    try:
-        from eval_toolkit.bootstrap import block_bootstrap_on_folds
-    except ImportError:  # optional stats dep absent → no interval, not a crash
-        logger.warning("eval_toolkit missing — across-epoch interval omitted")
+    block_bootstrap_on_folds = _bootstrap_fn()
+    if block_bootstrap_on_folds is None:
         return None, None
     ci = block_bootstrap_on_folds(values, n_resamples=2000, rng=42)
     return float(ci.ci_low), float(ci.ci_high)
 
 
-def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]) -> ReportCell:
+def _aggregate_cell(key: tuple[str, str, str, str], group: list[dict[str, Any]]) -> ReportCell:
     """Aggregate one cell's per-epoch rows into a :class:`ReportCell` (honest stats)."""
     task_id, model, effort, variant = key
-    values = np.array([row[5] for row in group], dtype=float)
-    costs = np.array([row[6] for row in group], dtype=float)
-    lats = np.array([row[7] for row in group], dtype=float)
-    shuffles = [float(row[8]) for row in group if row[8] is not None]
+    values = np.array([row["value"] for row in group], dtype=float)
+    costs = np.array([row["cost_usd"] for row in group], dtype=float)
+    lats = np.array([row["latency_s"] for row in group], dtype=float)
+    shuffles = [float(row["shuffled"]) for row in group if row["shuffled"] is not None]
     n = len(values)
 
     ci_low, ci_high = _epoch_interval(values)
@@ -349,8 +384,12 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
     # Token statistics cover only the epochs that measured them (pre-2026-07-06 rows
     # carry NULLs). Means over the measured subset, with the subset size surfaced as
     # ``n_token_epochs`` — a partial denominator must be visible, never implied.
-    in_toks = np.array([row[11] for row in group if row[11] is not None], dtype=float)
-    out_toks = np.array([row[12] for row in group if row[12] is not None], dtype=float)
+    in_toks = np.array(
+        [row["input_tokens"] for row in group if row["input_tokens"] is not None], dtype=float
+    )
+    out_toks = np.array(
+        [row["output_tokens"] for row in group if row["output_tokens"] is not None], dtype=float
+    )
     tokens_ci_low, tokens_ci_high = _epoch_interval(out_toks)
 
     # The self-test fires on the WORST epoch — averaging would let one broken run hide.
@@ -361,7 +400,7 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
         effort=effort,
         variant=variant,
         n_epochs=n,
-        n_spec=len({row[4] for row in group}),
+        n_spec=len({row["spec_sha"] for row in group}),
         mean_value=float(values.mean()),
         sd_value=float(values.std(ddof=1)) if n >= 2 else None,
         mean_cost=float(costs.mean()),
@@ -370,8 +409,8 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
         ci_high=ci_high,
         shuffled_auroc=(sum(shuffles) / len(shuffles)) if shuffles else None,
         leakage=max_dev is not None and max_dev > LEAKAGE_BAND,
-        n_unparseable=sum(1 for row in group if row[9] == "unparseable"),
-        n_grader_versions=len({row[10] for row in group}),
+        n_unparseable=sum(1 for row in group if row["grade_status"] == "unparseable"),
+        n_grader_versions=len({row["grader_version"] for row in group}),
         cost_ci_low=cost_ci_low,
         cost_ci_high=cost_ci_high,
         latency_ci_low=latency_ci_low,
@@ -393,7 +432,7 @@ def _mark_pareto(cells: list[ReportCell], *, x_axis: str = "cost") -> list[Repor
     """
     out: list[ReportCell] = []
     for cell in cells:
-        x = _x_value(cell, x_axis)
+        x = x_value(cell, x_axis)
         if x is None:
             out.append(replace(cell, pareto=False))
             continue
@@ -401,7 +440,7 @@ def _mark_pareto(cells: list[ReportCell], *, x_axis: str = "cost") -> list[Repor
         for other in cells:
             if other is cell or other.task_id != cell.task_id:
                 continue
-            ox = _x_value(other, x_axis)
+            ox = x_value(other, x_axis)
             if ox is None:
                 continue
             if (

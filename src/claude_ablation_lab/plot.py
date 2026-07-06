@@ -23,6 +23,8 @@ matplotlib.use("Agg")  # headless: select before pyplot is imported
 import matplotlib.pyplot as plt  # noqa: E402  (must follow matplotlib.use)
 from matplotlib.lines import Line2D  # noqa: E402
 
+from claude_ablation_lab.analyze import x_value  # noqa: E402
+
 if TYPE_CHECKING:
     from matplotlib.figure import Figure
 
@@ -35,18 +37,15 @@ _EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
 #: Distinct markers per effort (cycled if a grid uses more effort levels).
 _EFFORT_MARKERS = ["o", "s", "^", "D", "v", "P"]
 
-#: Per-axis plumbing for the Pareto scatter: (mean attr, ci-low attr, ci-high attr,
-#: x label). Keys mirror ``analyze.X_AXES`` — the frontier flag must be computed by
-#: ``report(x_axis=...)`` against the same axis this figure draws.
+#: Plot-only metadata per Pareto axis: (ci-low attr, ci-high attr, x label). The x
+#: positions and figure membership come from ``analyze.x_value`` — the same predicate
+#: that computes the ``pareto`` flag, so the frontier and the picture can never
+#: disagree on which cells compete (PR-wide review). Keys must mirror
+#: ``analyze.X_AXES``; a drift-canary test asserts the keysets match.
 _X_AXIS_SPEC = {
-    "cost": ("mean_cost", "cost_ci_low", "cost_ci_high", "mean cost ($ / cell)"),
-    "latency": ("mean_latency", "latency_ci_low", "latency_ci_high", "mean latency (s / cell)"),
-    "tokens": (
-        "mean_output_tokens",
-        "tokens_ci_low",
-        "tokens_ci_high",
-        "mean output tokens / cell",
-    ),
+    "cost": ("cost_ci_low", "cost_ci_high", "mean cost ($ / cell)"),
+    "latency": ("latency_ci_low", "latency_ci_high", "mean latency (s / cell)"),
+    "tokens": ("tokens_ci_low", "tokens_ci_high", "mean output tokens / cell"),
 }
 #: use a log x-scale when the (positive) x values span at least this ratio — wide
 #: cost ranges (haiku/low → opus/max is routinely >10×) squash to a left-edge blob
@@ -73,17 +72,25 @@ def pareto_scatter(cells: list[ReportCell], *, task: str, x_axis: str = "cost") 
     get a filled marker and a dashed **staircase** frontier (the achievable-quality
     envelope: between frontier points, the best attainable quality is the previous
     point's); leaky cells (``cell.leakage``) get a red ring. Error bars are drawn on
-    both axes where intervals exist. Cells whose x is unmeasured (``None`` — tokens
-    on a pre-token ledger) are dropped from the figure and counted in the title.
+    both axes where intervals exist. Cells without a usable x (``analyze.x_value``
+    returns ``None``: unmeasured, NaN, or partial token coverage) are dropped from
+    the figure and counted in the title — the same predicate that decides frontier
+    membership, so figure and flag can never disagree.
     One error-bar container is emitted per plotted cell, so a test can assert
     ``len(ax.containers) == len(plotted_cells)``. A positive x-range wider than
     ``_LOG_X_RATIO`` switches to a log x-scale.
     """
     if x_axis not in _X_AXIS_SPEC:
         raise ValueError(f"x_axis must be one of {sorted(_X_AXIS_SPEC)} (got {x_axis!r})")
-    x_attr, xlo_attr, xhi_attr, x_label = _X_AXIS_SPEC[x_axis]
+    xlo_attr, xhi_attr, x_label = _X_AXIS_SPEC[x_axis]
     all_task_cells = [c for c in cells if c.task_id == task]
-    task_cells = [c for c in all_task_cells if getattr(c, x_attr) is not None]
+    task_cells: list[ReportCell] = []
+    xs: list[float] = []
+    for c in all_task_cells:
+        x_pos = x_value(c, x_axis)
+        if x_pos is not None:
+            task_cells.append(c)
+            xs.append(x_pos)
     n_unmeasured = len(all_task_cells) - len(task_cells)
     fig, ax = plt.subplots(figsize=(7, 5))
     if not task_cells:
@@ -103,15 +110,16 @@ def pareto_scatter(cells: list[ReportCell], *, task: str, x_axis: str = "cost") 
     label_of = {s: s[0] if len(variants) == 1 else f"{s[0]} @ {s[1]}" for s in series}
     marker_of = {e: _EFFORT_MARKERS[i % len(_EFFORT_MARKERS)] for i, e in enumerate(efforts)}
 
-    for c in task_cells:
-        x = float(getattr(c, x_attr))
+    for c, x in zip(task_cells, xs, strict=True):
         yerr = None
         if c.ci_low is not None and c.ci_high is not None:
             yerr = [[c.mean_value - c.ci_low], [c.ci_high - c.mean_value]]
         xerr = None
         x_lo, x_hi = getattr(c, xlo_attr), getattr(c, xhi_attr)
         if x_lo is not None and x_hi is not None:
-            xerr = [[x - x_lo], [x_hi - x]]
+            # Clamped: matplotlib raises on a negative bar, and a percentile-bootstrap
+            # endpoint landing past the mean must degrade to a zero-length bar, not a crash.
+            xerr = [[max(0.0, x - x_lo)], [max(0.0, x_hi - x)]]
         key = (c.model, c.variant)
         ax.errorbar(
             x,
@@ -143,11 +151,13 @@ def pareto_scatter(cells: list[ReportCell], *, task: str, x_axis: str = "cost") 
     # Staircase, not point-to-point: between frontier points the best *achievable*
     # quality is the previous (cheaper) point's, so the envelope holds flat then
     # steps up at each frontier cell (the leaderboard-scatter convention).
-    frontier = sorted((c for c in task_cells if c.pareto), key=lambda c: float(getattr(c, x_attr)))
+    frontier = sorted(
+        ((x, c) for c, x in zip(task_cells, xs, strict=True) if c.pareto), key=lambda t: t[0]
+    )
     if len(frontier) >= 2:
         ax.step(
-            [float(getattr(c, x_attr)) for c in frontier],
-            [c.mean_value for c in frontier],
+            [x for x, _ in frontier],
+            [c.mean_value for _, c in frontier],
             where="post",
             linestyle="--",
             color="black",
@@ -156,7 +166,6 @@ def pareto_scatter(cells: list[ReportCell], *, task: str, x_axis: str = "cost") 
             zorder=2,
         )
 
-    xs = [float(getattr(c, x_attr)) for c in task_cells]
     if min(xs) > 0 and max(xs) / min(xs) >= _LOG_X_RATIO:
         ax.set_xscale("log")
 

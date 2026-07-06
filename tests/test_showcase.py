@@ -102,9 +102,36 @@ def test_sanitize_row_keeps_only_keep_fields() -> None:
 
 @pytest.mark.unit
 def test_foreign_task_is_an_error_not_a_silent_drop() -> None:
-    with pytest.raises(ValueError, match="not a showcase task"):
+    with pytest.raises(ValueError, match="not in the allowed set"):
         sanitize_row(_raw_row(task_id="t1_prompt_injection"))
     assert {"t3_verbatim_anchor", "t4_demo_infra"} == SHOWCASE_TASKS
+
+
+@pytest.mark.unit
+def test_explicit_tasks_allowlist_admits_named_task_only() -> None:
+    # Publishing a non-showcase ledger (the claude5-refresh snapshots) is an explicit
+    # per-task opt-in: the named task sanitizes with the same field allow-list, and
+    # anything NOT named still aborts — never a blanket export.
+    kept = sanitize_row(
+        _raw_row(task_id="t8_hard_math", output_tokens=998),
+        tasks=frozenset({"t8_hard_math"}),
+    )
+    assert kept["task_id"] == "t8_hard_math"
+    assert kept["output_tokens"] == 998
+    assert "session_id" not in kept and "output_preview" not in kept
+    with pytest.raises(ValueError, match="not in the allowed set"):
+        sanitize_row(_raw_row(task_id="t4_demo_infra"), tasks=frozenset({"t8_hard_math"}))
+
+
+@pytest.mark.unit
+def test_sanitize_ledger_threads_tasks_allowlist(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.jsonl"
+    rows = [_raw_row(task_id="t8_hard_math", epoch=i) for i in range(2)]
+    raw.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    out = tmp_path / "refresh.jsonl"
+    assert sanitize_ledger(raw, out, tasks=frozenset({"t8_hard_math"})) == 2
+    with pytest.raises(ValueError, match="not in the allowed set"):
+        sanitize_ledger(raw, tmp_path / "default.jsonl")  # default stays showcase-only
 
 
 @pytest.mark.unit

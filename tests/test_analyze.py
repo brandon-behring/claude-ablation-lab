@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+
+import numpy as np
 import pytest
 
 from claude_ablation_lab.analyze import ReportCell, compare, cost_advisor, report
@@ -172,6 +175,55 @@ def test_report_token_axis_unmeasured_cell_never_pareto_never_dominates(tmp_path
     # not dominate the measured one despite its higher quality.
     assert cells["opus"].pareto is False
     assert cells["haiku"].pareto is True
+
+
+@pytest.mark.unit
+def test_report_token_axis_partial_coverage_never_pareto_never_dominates(tmp_path) -> None:
+    # Mixed-era cell: 2 epochs, only 1 measured tokens. Its token mean is a partial
+    # denominator — letting it compete would let a partially-unknown cost read as
+    # measured (PR-wide review, F1). It must sit off the token frontier AND not
+    # dominate, while staying visible for display (mean + n_token_epochs).
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="m0", model="haiku", epoch=0, value=1.0, out_tok=100)
+    _row(led, rid="m1", model="haiku", epoch=1, value=1.0)  # pre-token epoch
+    _row(led, rid="f0", model="sonnet", epoch=0, value=0.9, out_tok=900)
+    cells = {c.model: c for c in report(led, x_axis="tokens")}
+    assert cells["haiku"].n_token_epochs == 1 and cells["haiku"].n_epochs == 2
+    assert cells["haiku"].mean_output_tokens == pytest.approx(100.0)  # display survives
+    assert cells["haiku"].pareto is False
+    # sonnet is fully measured (1/1) — it must win despite haiku's cheaper partial mean.
+    assert cells["sonnet"].pareto is True
+
+
+@pytest.mark.unit
+def test_bootstrap_missing_warns_once_not_per_call(monkeypatch, caplog) -> None:
+    import sys
+
+    from claude_ablation_lab.analyze import _bootstrap_fn, _epoch_interval
+
+    # Force the ImportError even when eval_toolkit is installed (None in sys.modules
+    # makes `from eval_toolkit.bootstrap import ...` raise), and clear the cache on
+    # both sides so this test neither sees nor leaves a poisoned loader.
+    _bootstrap_fn.cache_clear()
+    monkeypatch.setitem(sys.modules, "eval_toolkit.bootstrap", None)
+    try:
+        with caplog.at_level(logging.WARNING, logger="claude_ablation_lab.analyze"):
+            assert _epoch_interval(np.array([1.0, 2.0, 3.0])) == (None, None)
+            assert _epoch_interval(np.array([4.0, 5.0, 6.0])) == (None, None)
+        warnings = [r for r in caplog.records if "eval_toolkit missing" in r.message]
+        assert len(warnings) == 1  # once per process, not once per axis per cell
+    finally:
+        _bootstrap_fn.cache_clear()
+
+
+@pytest.mark.unit
+def test_plot_axis_spec_mirrors_analyze_x_axes() -> None:
+    # Drift canary: the plot's per-axis metadata and the frontier's axis registry
+    # must stay in sync — adding an axis to one module without the other fails here.
+    from claude_ablation_lab import plot
+    from claude_ablation_lab.analyze import X_AXES
+
+    assert set(plot._X_AXIS_SPEC) == set(X_AXES)
 
 
 @pytest.mark.unit
