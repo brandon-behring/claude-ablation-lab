@@ -96,6 +96,16 @@ class LedgerRow:
     #: cell: ``{"Bash": 3, "Write": 1, "Skill": 1}``), the same DuckDB-heterogeneity
     #: reason those two fields aren't native columns.
     tool_calls: dict[str, int] | None = None
+    #: Token usage from the CLI's ``usage`` payload, persisted as native scalars so
+    #: DuckDB can aggregate a token-denominated cost axis (on a flat subscription,
+    #: token volume — not ``cost_usd`` — is the honest spend currency, and cache-read
+    #: is empirically its largest component: 2026-07-03 spend audit). ``None`` means
+    #: *not measured* — the key was absent from the payload, or the row predates
+    #: 2026-07-06 — never a measured zero (the ``tool_calls`` None-vs-{} rule).
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_creation_tokens: int | None = None
 
     @property
     def run_key(self) -> RunKey:

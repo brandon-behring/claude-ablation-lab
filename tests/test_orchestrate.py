@@ -6,7 +6,7 @@ import json
 import subprocess
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -653,3 +653,47 @@ def test_run_sweep_missing_artifact_is_quality_zero_not_infra(
     assert row.run_status == "ok"  # the run itself succeeded
     assert row.grade_status == "ok" and row.value == 0.0  # graded honestly as a 0, not grader_error
     assert row.details.get("artifact_missing") is True
+
+
+# --- token persistence (2026-07-06 Pareto plumbing) ---------------------------- #
+
+
+@pytest.mark.unit
+def test_run_sweep_persists_usage_tokens(tmp_path) -> None:
+    usage = {
+        "input_tokens": 10,
+        "output_tokens": 40,
+        "cache_read_input_tokens": 15757,
+        "cache_creation_input_tokens": 16861,
+    }
+    runner = FakeRunner(lambda n, **kw: replace(_ok(run_id=f"r{n}"), usage=usage))
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    run_sweep([_anchor_task()], grid, runner=runner, **_sweep_kwargs(tmp_path))
+    [row] = load_rows(tmp_path / "ledger.jsonl")
+    assert (row.input_tokens, row.output_tokens) == (10, 40)
+    assert (row.cache_read_tokens, row.cache_creation_tokens) == (15757, 16861)
+
+
+@pytest.mark.unit
+def test_run_sweep_absent_usage_tokens_stay_none(tmp_path) -> None:
+    # The FakeRunner default carries usage={} — keys absent — so every token field
+    # must persist as None (not measured), never a fabricated 0.
+    runner = FakeRunner(lambda n, **kw: _ok(run_id=f"r{n}"))
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    run_sweep([_anchor_task()], grid, runner=runner, **_sweep_kwargs(tmp_path))
+    [row] = load_rows(tmp_path / "ledger.jsonl")
+    assert row.input_tokens is None and row.output_tokens is None
+    assert row.cache_read_tokens is None and row.cache_creation_tokens is None
+
+
+@pytest.mark.unit
+def test_usage_token_guards_malformed_values() -> None:
+    from claude_ablation_lab.orchestrate import _usage_token
+
+    assert _usage_token({"output_tokens": 40}, "output_tokens") == 40
+    assert _usage_token({"output_tokens": 40.0}, "output_tokens") == 40
+    assert _usage_token({"output_tokens": 0}, "output_tokens") == 0  # measured zero
+    assert _usage_token({}, "output_tokens") is None  # absent = not measured
+    assert _usage_token(None, "output_tokens") is None
+    assert _usage_token({"output_tokens": "40"}, "output_tokens") is None  # no coercion
+    assert _usage_token({"output_tokens": True}, "output_tokens") is None  # bool is not a count

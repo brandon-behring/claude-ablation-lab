@@ -21,13 +21,19 @@ def _cell(
     *,
     value: float = 0.9,
     cost: float = 0.02,
+    lat: float = 5.0,
     ci: tuple[float, float] | None = None,
+    cost_ci: tuple[float, float] | None = None,
+    lat_ci: tuple[float, float] | None = None,
+    out_tok: float | None = None,
     pareto: bool = False,
     leakage: bool = False,
     task: str = "t3",
     variant: str = "none",
 ) -> ReportCell:
     lo, hi = ci if ci else (None, None)
+    clo, chi = cost_ci if cost_ci else (None, None)
+    llo, lhi = lat_ci if lat_ci else (None, None)
     return ReportCell(
         task_id=task,
         model=model,
@@ -38,12 +44,18 @@ def _cell(
         mean_value=value,
         sd_value=0.05,
         mean_cost=cost,
-        mean_latency=5.0,
+        mean_latency=lat,
         ci_low=lo,
         ci_high=hi,
         shuffled_auroc=None,
         pareto=pareto,
         leakage=leakage,
+        cost_ci_low=clo,
+        cost_ci_high=chi,
+        latency_ci_low=llo,
+        latency_ci_high=lhi,
+        mean_output_tokens=out_tok,
+        n_token_epochs=3 if out_tok is not None else 0,
     )
 
 
@@ -84,6 +96,70 @@ def test_pareto_scatter_renders_ci_bars_and_frontier() -> None:
     assert all(len(c) == 3 and c[2] for c in ax.containers)  # each errorbar has barlines
     frontier = [ln for ln in ax.get_lines() if ln.get_linestyle() == "--"]
     assert frontier and list(frontier[0].get_xdata()) == [0.01, 0.10]  # sorted by cost
+
+
+@pytest.mark.unit
+def test_pareto_scatter_frontier_is_a_staircase() -> None:
+    # The frontier is the achievable-quality envelope: flat between points, stepping
+    # up at each frontier cell — drawn as a steps-post line, not point-to-point.
+    cells = [
+        _cell("haiku", "low", value=0.7, cost=0.01, pareto=True),
+        _cell("sonnet", "low", value=0.9, cost=0.10, pareto=True),
+    ]
+    ax = plot.pareto_scatter(cells, task="t3").axes[0]
+    frontier = [ln for ln in ax.get_lines() if ln.get_linestyle() == "--"]
+    assert frontier and frontier[0].get_drawstyle() == "steps-post"
+
+
+@pytest.mark.unit
+def test_pareto_scatter_latency_axis_positions_and_labels() -> None:
+    cells = [
+        _cell("haiku", "low", cost=0.01, lat=30.0, lat_ci=(25.0, 35.0)),
+        _cell("sonnet", "low", cost=0.05, lat=5.0),
+    ]
+    ax = plot.pareto_scatter(cells, task="t3", x_axis="latency").axes[0]
+    xs = sorted(float(c[0].get_xdata()[0]) for c in ax.containers)
+    assert xs == [5.0, 30.0]  # positioned by latency, not cost
+    assert "latency" in ax.get_xlabel()
+    # The cell with a latency interval gets x error bars (3-tuple with barlines).
+    assert any(len(c) == 3 and c[2] for c in ax.containers)
+
+
+@pytest.mark.unit
+def test_pareto_scatter_tokens_axis_drops_unmeasured_cells() -> None:
+    cells = [
+        _cell("haiku", "low", out_tok=500.0),
+        _cell("opus", "low"),  # unmeasured tokens: dropped from the figure, counted
+    ]
+    ax = plot.pareto_scatter(cells, task="t3", x_axis="tokens").axes[0]
+    assert len(ax.containers) == 1
+    assert "1 cell(s) lack tokens data" in ax.get_title()
+
+
+@pytest.mark.unit
+def test_pareto_scatter_tokens_axis_all_unmeasured_is_safe() -> None:
+    fig = plot.pareto_scatter([_cell("haiku", "low")], task="t3", x_axis="tokens")
+    assert "no cells with a measured tokens axis" in fig.axes[0].get_title()
+
+
+@pytest.mark.unit
+def test_pareto_scatter_rejects_unknown_axis() -> None:
+    with pytest.raises(ValueError, match="x_axis"):
+        plot.pareto_scatter([_cell()], task="t3", x_axis="bogus")
+
+
+@pytest.mark.unit
+def test_pareto_scatter_wide_cost_range_goes_log() -> None:
+    cells = [_cell("haiku", "low", cost=0.005), _cell("opus", "max", cost=0.5)]
+    ax = plot.pareto_scatter(cells, task="t3").axes[0]
+    assert ax.get_xscale() == "log"  # 100× spread → log axis
+
+
+@pytest.mark.unit
+def test_pareto_scatter_narrow_cost_range_stays_linear() -> None:
+    cells = [_cell("haiku", "low", cost=0.02), _cell("sonnet", "low", cost=0.05)]
+    ax = plot.pareto_scatter(cells, task="t3").axes[0]
+    assert ax.get_xscale() == "linear"
 
 
 @pytest.mark.unit
@@ -143,6 +219,16 @@ def test_render_all_writes_nonempty_files(tmp_path) -> None:
     written = plot.render_all(cells, rows, tmp_path, fmt="png", a="A", b="B")
     assert len(written) == 5  # 2 tasks × (pareto + effort) + 1 forest
     assert all(p.exists() and p.stat().st_size > 0 for p in written)
+
+
+@pytest.mark.unit
+def test_render_all_suffixes_non_cost_axis_filenames(tmp_path) -> None:
+    # A latency view must never silently overwrite the historical cost figure.
+    cells = [_cell("haiku", "low", task="t3")]
+    written = plot.render_all(cells, [], tmp_path, x_axis="latency")
+    names = {p.name for p in written}
+    assert "t3_pareto_latency.png" in names
+    assert "t3_pareto.png" not in names
 
 
 @pytest.mark.unit

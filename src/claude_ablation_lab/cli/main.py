@@ -312,6 +312,13 @@ def plot(
         str | None, typer.Option("--b", help="Candidate variant for the A/B forest")
     ] = None,
     fmt: Annotated[str, typer.Option("--format", help="Figure format: png / svg / pdf")] = "png",
+    x_axis: Annotated[
+        str,
+        typer.Option(
+            "--x-axis",
+            help="Pareto cost axis: cost ($) / latency (s) / tokens (output tokens)",
+        ),
+    ] = "cost",
 ) -> None:
     """Render Pareto / effort-curve / A→B-forest figures from a ledger (needs the ``plot`` extra)."""
     if fmt not in ("png", "svg", "pdf"):
@@ -320,9 +327,14 @@ def plot(
     if bool(a) != bool(b):
         console.print("[red]--a and --b must be given together[/red] (each names a variant)")
         raise typer.Exit(2)
+    from claude_ablation_lab.analyze import X_AXES
     from claude_ablation_lab.analyze import report as run_report
 
-    cells = run_report(ledger)
+    if x_axis not in X_AXES:
+        console.print(f"[red]unsupported --x-axis {x_axis!r}[/red] (choose {'/'.join(X_AXES)})")
+        raise typer.Exit(2)
+    # Pareto marking is axis-specific — report() must mark against the plotted axis.
+    cells = run_report(ledger, x_axis=x_axis)
     wanted = set(task) if task else None
     if wanted is not None:
         cells = [c for c in cells if c.task_id in wanted]
@@ -347,7 +359,9 @@ def plot(
                 f"[yellow]no A/B forest: no task ran under both {a} and {b}"
                 f"{' for the selected tasks' if wanted is not None else ''}[/yellow]"
             )
-    written = plot_mod.render_all(cells, compare_rows, out, fmt=fmt, a=a or "A", b=b or "B")
+    written = plot_mod.render_all(
+        cells, compare_rows, out, fmt=fmt, a=a or "A", b=b or "B", x_axis=x_axis
+    )
     console.print(f"wrote {len(written)} figure(s) → {out}")
     for path in written:
         console.print(f"  {path.name}")
@@ -396,8 +410,26 @@ def _fmt(value: float | None, places: int = 3) -> str:
     return "—" if value is None else f"{value:.{places}f}"
 
 
+def _with_interval(mean: float, lo: float | None, hi: float | None, places: int) -> str:
+    """``mean [lo,hi]`` when an across-epoch interval exists, else the bare mean."""
+    base = _fmt(mean, places)
+    if lo is None or hi is None:
+        return base
+    return f"{base} [{_fmt(lo, places)},{_fmt(hi, places)}]"
+
+
+def _fmt_tokens(c) -> str:  # type: ignore[no-untyped-def]
+    """Mean output tokens; a mixed-era ledger shows the measured denominator."""
+    if c.mean_output_tokens is None:
+        return "—"
+    base = f"{c.mean_output_tokens:.0f}"
+    if c.n_token_epochs < c.n_epochs:  # partial coverage must be visible
+        base += f" ({c.n_token_epochs}/{c.n_epochs})"
+    return base
+
+
 def _print_report(cells: list) -> None:  # type: ignore[type-arg]
-    """Render report cells: quality (±epoch CI), cost, latency, Pareto, leakage."""
+    """Render report cells: quality (±epoch CI), cost, latency, tokens, Pareto, leakage."""
     table = Table(title="report — quality vs cost (epochs = exploratory run-variance)")
     for col in (
         "task",
@@ -409,6 +441,7 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
         "CI(epoch)",
         "cost$",
         "lat s",
+        "out-tok",
         "",
     ):
         table.add_column(col)
@@ -433,8 +466,9 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
             str(c.n_epochs),
             _fmt(c.mean_value),
             ci,
-            _fmt(c.mean_cost, 4),
-            _fmt(c.mean_latency, 1),
+            _with_interval(c.mean_cost, c.cost_ci_low, c.cost_ci_high, 4),
+            _with_interval(c.mean_latency, c.latency_ci_low, c.latency_ci_high, 1),
+            _fmt_tokens(c),
             flags,
         )
     console.print(table)
@@ -442,7 +476,8 @@ def _print_report(cells: list) -> None:  # type: ignore[type-arg]
         "★ = Pareto-optimal (quality vs cost) · ⚠LEAK = shuffled-label self-test off 0.5 · "
         "⚠SPEC = cell mixes task specs · ⚠VER = cell mixes grader versions · "
         "⚠Nunp = N unparseable epochs counted as honest 0.0 · "
-        "CI(epoch) at <5 epochs is the min–max epoch range, not a 95% CI"
+        "every [lo,hi] at <5 epochs is the min–max epoch range, not a 95% CI · "
+        "out-tok (n/N) = tokens measured on n of N epochs"
     )
 
 

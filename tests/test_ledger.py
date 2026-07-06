@@ -146,3 +146,39 @@ def test_ok_row_by_run_key_latest_wins() -> None:
     late = _row(run_id="late", value=0.9)
     by_key = ok_row_by_run_key([early, late])
     assert by_key[early.run_key].run_id == "late"  # most recent ok run reused
+
+
+@pytest.mark.unit
+def test_token_fields_roundtrip_as_native_scalars(tmp_path) -> None:
+    path = tmp_path / "ledger.jsonl"
+    append_row(
+        path,
+        _row(
+            input_tokens=10,
+            output_tokens=40,
+            cache_read_tokens=15757,
+            cache_creation_tokens=16861,
+        ),
+    )
+    raw = json.loads(path.read_text(encoding="utf-8").strip())
+    assert raw["output_tokens"] == 40  # native scalar, not a JSON string
+    [loaded] = load_rows(path)
+    assert (loaded.input_tokens, loaded.output_tokens) == (10, 40)
+    assert (loaded.cache_read_tokens, loaded.cache_creation_tokens) == (15757, 16861)
+
+
+@pytest.mark.unit
+def test_token_fields_default_none_so_old_rows_still_load(tmp_path) -> None:
+    # A pre-2026-07-06 row (no token keys at all) must load with None — "not
+    # measured" — exactly the tool_calls absent-key rule.
+    path = tmp_path / "ledger.jsonl"
+    append_row(path, _row())
+    raw = json.loads(path.read_text(encoding="utf-8").strip())
+    for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens"):
+        del raw[key]
+    path.write_text(json.dumps(raw) + "\n", encoding="utf-8")
+    [loaded] = load_rows(path)
+    assert loaded.input_tokens is None
+    assert loaded.output_tokens is None
+    assert loaded.cache_read_tokens is None
+    assert loaded.cache_creation_tokens is None

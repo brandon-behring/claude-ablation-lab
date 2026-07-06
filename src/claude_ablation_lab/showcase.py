@@ -65,6 +65,12 @@ KEEP_FIELDS: frozenset[str] = frozenset(
         "harness_sha",
         "infra_sha",
         "tool_calls",
+        # Token usage (native scalars, 2026-07-06): the token-denominated cost axis.
+        # Counts carry no prompt/output text, so they are safe to publish.
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
     }
 )
 

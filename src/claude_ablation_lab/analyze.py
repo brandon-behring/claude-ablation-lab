@@ -58,6 +58,7 @@ __all__ = [
     "compare",
     "cost_advisor",
     "LEAKAGE_BAND",
+    "X_AXES",
 ]
 
 logger = logging.getLogger(__name__)
@@ -77,6 +78,22 @@ MIN_PAIRS_FOR_REAL = 6
 #: significance level for the exact sign-flip permutation verdict.
 ALPHA = 0.05
 
+# Every ledger column the analysis queries touch, with explicit types. Declaring
+# the schema (instead of letting read_json infer it) makes old ledgers forward-
+# compatible: a column absent from the file (e.g. the 2026-07-06 token fields on a
+# pre-token ledger) reads as NULL instead of raising — the SQL-side mirror of
+# ``LedgerRow``'s defaulted dataclass fields. A new analysis column must be added
+# here as well as to the dataclass.
+_LEDGER_COLUMNS = """{
+    task_id: 'VARCHAR', model: 'VARCHAR', effort: 'VARCHAR', variant: 'VARCHAR',
+    epoch: 'BIGINT', grader_version: 'VARCHAR', run_id: 'VARCHAR',
+    run_status: 'VARCHAR', grade_status: 'VARCHAR', value: 'DOUBLE',
+    cost_usd: 'DOUBLE', latency_s: 'DOUBLE', spec_sha: 'VARCHAR',
+    subscores: 'VARCHAR', ts: 'VARCHAR',
+    input_tokens: 'BIGINT', output_tokens: 'BIGINT',
+    cache_read_tokens: 'BIGINT', cache_creation_tokens: 'BIGINT'
+}"""
+
 # Latest grade per run_id, then keep runs whose LATEST grade is definitive.
 #
 # Order matters: filtering grade_status BEFORE the window would let a run whose
@@ -88,9 +105,9 @@ ALPHA = 0.05
 # a *model quality* failure carrying its honest value=0.0 — excluding it would
 # silently inflate the surviving mean (2026-07-01 methodology audit). Only
 # ``grader_error`` (the grader itself failed; re-gradable) stays out.
-_LATEST_OK = """
+_LATEST_OK = f"""
 WITH ok_runs AS (
-    SELECT * FROM read_json(?, format='newline_delimited')
+    SELECT * FROM read_json(?, format='newline_delimited', columns={_LEDGER_COLUMNS})
     WHERE run_status = 'ok'
 ),
 ranked AS (
@@ -125,6 +142,24 @@ class ReportCell:
     n_unparseable: int = 0
     #: distinct grader_versions mixed into this cell (⚠ if > 1: metric definitions differ).
     n_grader_versions: int = 1
+    # Across-epoch intervals for the cost axes (same estimator and honesty rules as
+    # the quality ``ci_low``/``ci_high``: computed at ≥ MIN_EPOCHS_FOR_CI epochs and
+    # presented as an "epoch range", not a 95% CI, below 5 epochs).
+    cost_ci_low: float | None = None
+    cost_ci_high: float | None = None
+    latency_ci_low: float | None = None
+    latency_ci_high: float | None = None
+    #: Token means over the epochs that measured them (None: no epoch carried token
+    #: counts — every row predates 2026-07-06). The token cost axis is OUTPUT tokens:
+    #: on a flat subscription they are the honest spend/effort currency (2026-07-03
+    #: spend audit) and, unlike input+cache, they are what effort levels modulate.
+    mean_input_tokens: float | None = None
+    mean_output_tokens: float | None = None
+    tokens_ci_low: float | None = None
+    tokens_ci_high: float | None = None
+    #: epochs with measured token counts; < n_epochs means a mixed-era ledger and the
+    #: token statistics cover only the measured subset (surfaced, never silent).
+    n_token_epochs: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,23 +249,46 @@ def _connect() -> duckdb.DuckDBPyConnection:
     return duckdb.connect(database=":memory:")
 
 
-def report(ledger_path: Path | str) -> list[ReportCell]:
+#: valid ``x_axis`` values for the Pareto frontier and how each reads its x off a
+#: cell. ``cost`` is USD (a comparability metric on a subscription), ``latency`` is
+#: wall-clock seconds (the *real* cost of a flat subscription), ``tokens`` is mean
+#: output tokens (None on pre-2026-07-06 rows — such cells sit off any token
+#: frontier rather than being scored as free).
+X_AXES: dict[str, str] = {
+    "cost": "mean_cost",
+    "latency": "mean_latency",
+    "tokens": "mean_output_tokens",
+}
+
+
+def _x_value(cell: ReportCell, x_axis: str) -> float | None:
+    """The cell's position on the chosen cost axis (``None``: not measured)."""
+    value = getattr(cell, X_AXES[x_axis])
+    return None if value is None else float(value)
+
+
+def report(ledger_path: Path | str, *, x_axis: str = "cost") -> list[ReportCell]:
     """Aggregate the ledger into per-cell quality/cost rows (Pareto + leakage flagged).
 
     Per-epoch rows are pulled and aggregated in Python so the cell's CI is an
     honest **across-epoch bootstrap of the mean** (reported only at ≥
     :data:`MIN_EPOCHS_FOR_CI` epochs) — never the meaningless average of per-epoch
     CI endpoints — and leakage fires on the **worst** epoch, not the average.
-    Returns an empty list for a missing/empty ledger; cells are ordered by task,
-    then descending mean quality.
+    ``x_axis`` selects which cost axis (:data:`X_AXES`) the ``pareto`` flag is
+    computed against — the flag is *axis-specific*, so a latency frontier and a USD
+    frontier can disagree. Returns an empty list for a missing/empty ledger; cells
+    are ordered by task, then descending mean quality.
     """
+    if x_axis not in X_AXES:
+        raise ValueError(f"x_axis must be one of {sorted(X_AXES)} (got {x_axis!r})")
     path = Path(ledger_path)
     if not path.exists():
         return []
     sql = f"""
     SELECT task_id, model, effort, variant, spec_sha, value, cost_usd, latency_s,
         TRY_CAST(json_extract(subscores, '$.shuffled_auroc') AS DOUBLE) AS shuffled,
-        grade_status, grader_version
+        grade_status, grader_version,
+        input_tokens, output_tokens
     FROM ({_LATEST_OK})
     """
     con = _connect()
@@ -244,7 +302,26 @@ def report(ledger_path: Path | str) -> list[ReportCell]:
         grouped.setdefault((r[0], r[1], r[2], r[3]), []).append(r)
     cells = [_aggregate_cell(key, group) for key, group in grouped.items()]
     cells.sort(key=lambda c: (c.task_id, -c.mean_value))
-    return _mark_pareto(cells)
+    return _mark_pareto(cells, x_axis=x_axis)
+
+
+def _epoch_interval(values: np.ndarray) -> tuple[float | None, float | None]:
+    """Across-epoch bootstrap interval of the mean, or ``(None, None)`` below the gate.
+
+    One estimator for every aggregated axis (quality, cost, latency, tokens) so no
+    axis's uncertainty is computed to a different standard. At n=3–4 the percentile
+    bootstrap degenerates to the min–max epoch range (~74% coverage at n=3), so
+    downstream presentation labels it "epoch range", not a 95% CI, below 5 epochs.
+    """
+    if len(values) < MIN_EPOCHS_FOR_CI:
+        return None, None
+    try:
+        from eval_toolkit.bootstrap import block_bootstrap_on_folds
+    except ImportError:  # optional stats dep absent → no interval, not a crash
+        logger.warning("eval_toolkit missing — across-epoch interval omitted")
+        return None, None
+    ci = block_bootstrap_on_folds(values, n_resamples=2000, rng=42)
+    return float(ci.ci_low), float(ci.ci_high)
 
 
 def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]) -> ReportCell:
@@ -256,18 +333,17 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
     shuffles = [float(row[8]) for row in group if row[8] is not None]
     n = len(values)
 
-    ci_low = ci_high = None
-    if n >= MIN_EPOCHS_FOR_CI:
-        # An across-epoch interval; at n=3–4 the percentile bootstrap degenerates to
-        # the min–max epoch range (~74% coverage at n=3), so downstream presentation
-        # labels it "epoch range", not a 95% CI, below 5 epochs.
-        try:
-            from eval_toolkit.bootstrap import block_bootstrap_on_folds
-        except ImportError:  # optional stats dep absent → no interval, not a crash
-            logger.warning("eval_toolkit missing — across-epoch interval omitted")
-        else:
-            ci = block_bootstrap_on_folds(values, n_resamples=2000, rng=42)
-            ci_low, ci_high = float(ci.ci_low), float(ci.ci_high)
+    ci_low, ci_high = _epoch_interval(values)
+    cost_ci_low, cost_ci_high = _epoch_interval(costs)
+    latency_ci_low, latency_ci_high = _epoch_interval(lats)
+
+    # Token statistics cover only the epochs that measured them (pre-2026-07-06 rows
+    # carry NULLs). Means over the measured subset, with the subset size surfaced as
+    # ``n_token_epochs`` — a partial denominator must be visible, never implied.
+    in_toks = np.array([row[11] for row in group if row[11] is not None], dtype=float)
+    out_toks = np.array([row[12] for row in group if row[12] is not None], dtype=float)
+    tokens_ci_low, tokens_ci_high = _epoch_interval(out_toks)
+
     # The self-test fires on the WORST epoch — averaging would let one broken run hide.
     max_dev = max((abs(s - 0.5) for s in shuffles), default=None)
     return ReportCell(
@@ -287,21 +363,45 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[tuple[Any, ...]]
         leakage=max_dev is not None and max_dev > LEAKAGE_BAND,
         n_unparseable=sum(1 for row in group if row[9] == "unparseable"),
         n_grader_versions=len({row[10] for row in group}),
+        cost_ci_low=cost_ci_low,
+        cost_ci_high=cost_ci_high,
+        latency_ci_low=latency_ci_low,
+        latency_ci_high=latency_ci_high,
+        mean_input_tokens=float(in_toks.mean()) if in_toks.size else None,
+        mean_output_tokens=float(out_toks.mean()) if out_toks.size else None,
+        tokens_ci_low=tokens_ci_low,
+        tokens_ci_high=tokens_ci_high,
+        n_token_epochs=int(out_toks.size),
     )
 
 
-def _mark_pareto(cells: list[ReportCell]) -> list[ReportCell]:
-    """Flag cells on the per-task quality-vs-cost Pareto frontier (max value, min cost)."""
+def _mark_pareto(cells: list[ReportCell], *, x_axis: str = "cost") -> list[ReportCell]:
+    """Flag cells on the per-task quality-vs-x Pareto frontier (max value, min x).
+
+    ``x_axis`` picks the cost dimension (:data:`X_AXES`). A cell whose x is
+    unmeasured (``None`` — e.g. tokens on a pre-token ledger) is never on the
+    frontier and never dominates: an unknown cost must not read as a free one.
+    """
     out: list[ReportCell] = []
     for cell in cells:
-        dominated = any(
-            other is not cell
-            and other.task_id == cell.task_id
-            and other.mean_value >= cell.mean_value
-            and other.mean_cost <= cell.mean_cost
-            and (other.mean_value > cell.mean_value or other.mean_cost < cell.mean_cost)
-            for other in cells
-        )
+        x = _x_value(cell, x_axis)
+        if x is None:
+            out.append(replace(cell, pareto=False))
+            continue
+        dominated = False
+        for other in cells:
+            if other is cell or other.task_id != cell.task_id:
+                continue
+            ox = _x_value(other, x_axis)
+            if ox is None:
+                continue
+            if (
+                other.mean_value >= cell.mean_value
+                and ox <= x
+                and (other.mean_value > cell.mean_value or ox < x)
+            ):
+                dominated = True
+                break
         out.append(replace(cell, pareto=not dominated))
     return out
 
@@ -432,8 +532,9 @@ def _compare_task(
     )
 
 
-#: effort ordering for the reflex "highest available effort" fallback.
-_EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "max": 3}
+#: effort ordering for the reflex "highest available effort" fallback (xhigh sits
+#: between high and max — the Claude 4.7+/5 tier for long-horizon agentic work).
+_EFFORT_ORDER = {"low": 0, "medium": 1, "high": 2, "xhigh": 3, "max": 4}
 
 
 def _resolve_reflex(group: list[ReportCell], model: str, effort: str) -> tuple[ReportCell, str]:

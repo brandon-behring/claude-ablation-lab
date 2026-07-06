@@ -285,6 +285,20 @@ def _persist_output(outputs_dir: Path, run_id: str, output: str) -> str:
     return str(path)
 
 
+def _usage_token(usage: dict[str, object] | None, key: str) -> int | None:
+    """One token count from the CLI ``usage`` payload; absent/malformed → ``None``.
+
+    ``None`` must mean *not measured*, never a measured zero — a payload that
+    reports ``0`` keeps its honest 0 (e.g. a rate-limited cell), while a payload
+    missing the key entirely (old CLI, unexpected shape) yields ``None`` so the
+    ledger never fabricates a count (the ``tool_calls`` None-vs-{} rule).
+    """
+    value = (usage or {}).get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
 def _build_row(
     cell: Cell,
     grader_version: str,
@@ -339,6 +353,10 @@ def _build_row(
         tool_calls=(
             dict(Counter(run_result.tools_used)) if run_result.tools_used is not None else None
         ),
+        input_tokens=_usage_token(run_result.usage, "input_tokens"),
+        output_tokens=_usage_token(run_result.usage, "output_tokens"),
+        cache_read_tokens=_usage_token(run_result.usage, "cache_read_input_tokens"),
+        cache_creation_tokens=_usage_token(run_result.usage, "cache_creation_input_tokens"),
     )
 
 

@@ -151,3 +151,19 @@ def test_empty_ledger_refused(tmp_path: Path) -> None:
     raw.write_text("", encoding="utf-8")
     with pytest.raises(ValueError, match="no rows"):
         sanitize_ledger(raw, tmp_path / "out.jsonl")
+
+
+@pytest.mark.unit
+def test_token_fields_survive_sanitize() -> None:
+    # Token counts are the token-denominated cost axis and carry no text — the
+    # published showcase ledger must keep them (deliberate KEEP_FIELDS addition).
+    kept = sanitize_row(
+        _raw_row(
+            input_tokens=10,
+            output_tokens=40,
+            cache_read_tokens=15757,
+            cache_creation_tokens=16861,
+        )
+    )
+    assert kept["output_tokens"] == 40
+    assert kept["cache_read_tokens"] == 15757

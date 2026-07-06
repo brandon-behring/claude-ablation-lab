@@ -30,6 +30,8 @@ def _row(
     spec="S",
     run_status="ok",
     grade_status="ok",
+    in_tok=None,
+    out_tok=None,
 ) -> None:
     append_row(
         led,
@@ -55,6 +57,8 @@ def _row(
             details={},
             output_path=None,
             ts=ts,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
         ),
     )
 
@@ -95,6 +99,85 @@ def test_report_marks_pareto_frontier(tmp_path) -> None:
     cells = {c.model: c for c in report(led)}
     assert cells["opus"].pareto is True
     assert cells["haiku"].pareto is False
+
+
+@pytest.mark.unit
+def test_report_token_stats_partial_coverage(tmp_path) -> None:
+    # Mixed-era ledger: one epoch measured tokens, one predates them. Token stats
+    # cover only the measured subset and say so via n_token_epochs.
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="new", epoch=0, in_tok=100, out_tok=800)
+    _row(led, rid="old", epoch=1)
+    [cell] = report(led)
+    assert cell.n_epochs == 2
+    assert cell.n_token_epochs == 1
+    assert cell.mean_input_tokens == pytest.approx(100.0)
+    assert cell.mean_output_tokens == pytest.approx(800.0)
+
+
+@pytest.mark.unit
+def test_report_no_token_rows_reads_none_not_zero(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="r0")  # a pre-token row: unmeasured must stay None, never 0
+    [cell] = report(led)
+    assert cell.mean_output_tokens is None
+    assert cell.mean_input_tokens is None
+    assert cell.n_token_epochs == 0
+
+
+@pytest.mark.unit
+def test_report_cost_latency_intervals_share_the_epoch_gate(tmp_path) -> None:
+    pytest.importorskip("eval_toolkit")
+    led = tmp_path / "l.jsonl"
+    for i, (c, lt) in enumerate([(0.01, 1.0), (0.02, 2.0), (0.03, 3.0)]):
+        _row(led, rid=f"e{i}", epoch=i, cost=c, lat=lt)
+    [cell] = report(led)
+    # Same estimator and gate as the quality interval: present at 3 epochs, bounded
+    # by the observed epoch range (at n=3 it degenerates toward min–max).
+    assert cell.cost_ci_low is not None and cell.cost_ci_high is not None
+    assert 0.01 <= cell.cost_ci_low <= cell.cost_ci_high <= 0.03
+    assert cell.latency_ci_low is not None and cell.latency_ci_high is not None
+    assert 1.0 <= cell.latency_ci_low <= cell.latency_ci_high <= 3.0
+
+
+@pytest.mark.unit
+def test_report_no_cost_interval_below_epoch_gate(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="r0", epoch=0)
+    _row(led, rid="r1", epoch=1)
+    [cell] = report(led)
+    assert cell.cost_ci_low is None and cell.latency_ci_low is None
+
+
+@pytest.mark.unit
+def test_report_latency_frontier_differs_from_cost_frontier(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    # Cheap-but-slow vs pricey-but-fast at equal quality: each owns one axis, which
+    # is the whole point of a selectable frontier (subscription cost ≈ wall-clock).
+    _row(led, rid="a", model="haiku", value=1.0, cost=0.01, lat=30.0)
+    _row(led, rid="b", model="sonnet", value=1.0, cost=0.05, lat=5.0)
+    cost_front = {c.model for c in report(led, x_axis="cost") if c.pareto}
+    lat_front = {c.model for c in report(led, x_axis="latency") if c.pareto}
+    assert cost_front == {"haiku"}
+    assert lat_front == {"sonnet"}
+
+
+@pytest.mark.unit
+def test_report_token_axis_unmeasured_cell_never_pareto_never_dominates(tmp_path) -> None:
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="a", model="haiku", value=0.5, out_tok=500)
+    _row(led, rid="b", model="opus", value=1.0)  # higher quality but unmeasured tokens
+    cells = {c.model: c for c in report(led, x_axis="tokens")}
+    # The unmeasured cell sits off the token frontier (unknown ≠ free) — and it must
+    # not dominate the measured one despite its higher quality.
+    assert cells["opus"].pareto is False
+    assert cells["haiku"].pareto is True
+
+
+@pytest.mark.unit
+def test_report_rejects_unknown_x_axis(tmp_path) -> None:
+    with pytest.raises(ValueError, match="x_axis"):
+        report(tmp_path / "missing.jsonl", x_axis="bogus")
 
 
 @pytest.mark.unit
@@ -320,6 +403,20 @@ def test_advise_recommends_cheapest_on_quality_tie() -> None:
     assert row.cost_multiple == pytest.approx(0.080 / 0.005)
     assert row.latency_saving == pytest.approx(4.0)
     assert "same quality" in row.note and "cheaper" in row.note
+
+
+@pytest.mark.unit
+def test_advise_reflex_fallback_ranks_xhigh_above_high() -> None:
+    # An absent reflex (opus/max) falls back to the model's HIGHEST effort that ran —
+    # which must be xhigh, not high, on a Claude-5-era grid (effort-order fix).
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.08),
+        _cell(model="opus", effort="xhigh", value=1.0, cost=0.12),
+        _cell(model="haiku", effort="low", value=1.0, cost=0.01),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/max", margin=0.02)
+    assert (row.reflex_model, row.reflex_effort) == ("opus", "xhigh")
+    assert row.reflex_fallback is True
 
 
 @pytest.mark.unit
