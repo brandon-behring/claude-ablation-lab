@@ -40,4 +40,7 @@ def test_cli_exposes_exactly_the_expected_commands() -> None:
         "compare",
         "advise",
         "plot",
+        "judge",
+        "judge-report",
+        "judge-spotcheck",
     }

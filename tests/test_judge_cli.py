@@ -7,13 +7,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from test_judge_controls import _passing_rows
 from typer.testing import CliRunner
 
 from claude_ablation_lab.cli.main import app
 from claude_ablation_lab.judge import JudgeCall
 from claude_ablation_lab.judge_ledger import append_judge_row
 from claude_ablation_lab.ledger import LedgerRow, append_row
-from tests.test_judge_controls import _passing_rows
 
 cli = CliRunner()
 
@@ -147,7 +147,7 @@ def test_judge_runs_after_stored_controls_pass(tmp_path: Path, fake_judges: None
 
 @pytest.mark.unit
 def test_judge_report_command_renders_contrasts(tmp_path: Path) -> None:
-    from tests.test_judge_analyze import _contestant_row, _unanimous_rows
+    from test_judge_analyze import _contestant_row, _unanimous_rows
 
     judge_led = tmp_path / "judge.jsonl"
     for row in _unanimous_rows("claude-fable-5/high", ["claude-fable-5/high"] * 8):
