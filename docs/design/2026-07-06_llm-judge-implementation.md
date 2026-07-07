@@ -80,6 +80,49 @@ calls + 240 real judge calls (3 baseline pairings × 10 prompts × 2 epochs × 2
 orders × 2 judges) at `max_workers=4`, 240 s/call, 1 retry, circuit breaker at
 5-consecutive or >20 % failures.
 
-## Results
+## Results (pilot, 2026-07-06 — pending the human spot-check)
 
-*(to be filled by the pilot run)*
+Sweep: 80/80 cells `ok`, $20.70, conventions 0.88–0.93 per config, output
+lengths tightly matched (9.1–9.4 k chars — the 900–1400-word prompt target
+defused the verbosity confound at the source). Controls gate: **clean pass,
+both judges** (64/64 parsed; 8/8 same-output ties; padded won 0/6; degraded won
+0/6). Judge pass: **240/240 ok, 0 unparsed** — no embargo.
+
+Baseline (measured cheapest by `cost_usd`, frozen pre-judging): **sonnet/high**
+($0.134/cell) — not fable/low as the plan guessed; fable is the *expensive*
+model here. Every contrast therefore reads "does the pricier config beat the
+current default":
+
+| contrast vs sonnet/high | W/L/T | score | p (sign-flip) | real? | cost× | tok× | len× |
+|---|---|---|---|---|---|---|---|
+| **fable/high** ★ primary | 9/1/0 | +0.80 | **0.0039** (n≠0: 10) | **yes** | 3.25× | 1.07× | 1.04× |
+| fable/low (Holm) | 9/0/1 | +0.72 | 0.0039 → **0.0078 adj** | **yes** | 2.17× | **0.59×** | 1.03× |
+| opus/high (Holm) | 5/3/2 | +0.20 | 0.42 | no | 1.30× | 0.68× | 0.99× |
+
+Judge noise: order-flip 5–25 % per judge, cross-judge disagreement 15–20 %,
+0 % missing. **Length-stratified re-read** (the mandatory check): fable/high
+wins *more* decisively on pairs where its output is SHORTER than sonnet's
+(+1.00 vs +0.64) — the opposite of a verbosity artifact; fable/low wins in both
+strata (+0.38 shorter / +0.96 longer).
+
+Findings, scoped as **preference, not correctness**:
+
+1. **The lab's first REAL positive separation.** After t5–t8 found no opus edge
+   on any checkable probe, the open-ended instrument finds both Fable configs
+   decisively preferred over the sonnet/high default on the author's own
+   guide-section work.
+2. **The economics dark horse confirmed.** fable/low beats the default 9/0/1 at
+   0.77× latency and **0.59× output tokens** — on the token axis (the honest
+   flat-subscription spend currency per the 2026-07-03 audit) it is *cheaper
+   than the baseline and better*. On the USD axis it costs 2.17×. The
+   axis-disagreement lesson from the Pareto work recurs at the quality frontier.
+3. **Opus still never separates.** The pressure-test conclusion now extends to
+   open-ended authoring: opus/high is preferred on only 5/10 prompts (p = 0.42)
+   at 1.30× cost. The opus reflex remains unearned on every instrument the lab
+   has.
+
+Gate on headline use: `results/judge_spotcheck.md` (10 blinded pairs) awaits the
+author's verdicts; ≥ 80 % agreement (`ablation judge-spotcheck --score`) is
+required before these verdicts headline. Judge-side measurement cost: 307 ledger
+rows (64 control + 240 real settled calls + 3 retried transient failures, all
+recovered), mean 24 s/call, $0 marginal (subscription CLIs).

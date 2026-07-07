@@ -1,6 +1,9 @@
 # LLM-judge phase — pairwise preference for open-ended work
 
-> Status: **in progress** (built 2026-07-06; pilot running). Scheduled by the
+> Status: **pilot complete** (2026-07-06; results in
+> `docs/design/2026-07-06_llm-judge-implementation.md` — fable/high ★ and
+> fable/low REAL over the sonnet/high baseline; opus/high not; verdicts pending
+> the human spot-check gate). Scheduled by the
 > independent audit — `docs/audits/2026-07-06_independent-audit.md`. Build
 > decisions: `docs/design/2026-07-06_llm-judge-implementation.md`. Two design
 > deltas from this doc, both user-decided at build time: the judges are
