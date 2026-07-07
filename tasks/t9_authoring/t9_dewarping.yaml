@@ -1,0 +1,38 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; astro_book family).
+# Topic (page dewarping) verified ABSENT corpus-wide (grep 2026-07-06).
+id: t9_dewarping
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, astro-book]
+prompt: |
+  You are writing for "Pixels to Structure", an Astro/MDX build-to-learn book on
+  OCR and Document AI (each chapter builds a concept from scratch with a runnable
+  toy). Write a NEW chapter titled "Page Dewarping from Scratch" — geometric
+  rectification of curved and photographed pages — that the book does not yet
+  have. Cover:
+  - why cameras broke the flatbed assumption: perspective distortion vs curl,
+    and what each does to downstream line detection and recognition;
+  - a from-scratch toy: estimate text-line curves, fit a smooth displacement
+    field, and remap pixels — the classic optimization view before neural
+    dewarpers;
+  - how to evaluate dewarping (proxy OCR gains vs geometric ground truth) and
+    when to skip it entirely because the recognizer is already robust.
+  Match the book's established voice and MDX conventions exactly as demonstrated
+  in the reference material below: open with the <NoteBox> "at a glance" pattern
+  (Goal / Reading time / Key insight), use <WorkedExample> for the toy, and keep
+  the same heading discipline. Target 900-1400 words. Return ONLY the MDX source
+  of the section — no frontmatter, no commentary before or after.
+params:
+  corpus_family: astro_book
+  max_reference_chars: 6000
+  reference_files:
+    - ~/geometry-of-reading/src/content/chapters/ch16-cdm-from-scratch.mdx
+    - ~/geometry-of-reading/src/content/chapters/ch02-why-documents-are-hard.mdx
+gold:
+  family: astro_book
+  required_components:
+    - "<NoteBox"
+    - "<WorkedExample"

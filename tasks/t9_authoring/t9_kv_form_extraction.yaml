@@ -1,0 +1,37 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; astro_book family).
+# Topic (key-value/form extraction, FUNSD) verified ABSENT corpus-wide (grep 2026-07-06).
+id: t9_kv_form_extraction
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, astro-book]
+prompt: |
+  You are writing for "Pixels to Structure", an Astro/MDX build-to-learn book on
+  OCR and Document AI (each chapter builds a concept from scratch with a runnable
+  toy). Write a NEW chapter titled "Key-Value Extraction from Scratch" — form
+  understanding in the FUNSD style — that the book does not yet have. Cover:
+  - the task framing: semantic entity labeling (question/answer/header) plus
+    entity linking, and why forms break plain-text OCR assumptions;
+  - a from-scratch toy: represent a form as tokens with boxes, then link
+    question-answer pairs with a simple geometric + textual scoring rule before
+    reaching for a layout-aware model;
+  - evaluation: entity-level F1 and pair-linking metrics, and the failure modes
+    (multi-line values, checkbox fields, key reuse) a single score hides.
+  Match the book's established voice and MDX conventions exactly as demonstrated
+  in the reference material below: open with the <NoteBox> "at a glance" pattern
+  (Goal / Reading time / Key insight), use <WorkedExample> for the toy, and keep
+  the same heading discipline. Target 900-1400 words. Return ONLY the MDX source
+  of the section — no frontmatter, no commentary before or after.
+params:
+  corpus_family: astro_book
+  max_reference_chars: 6000
+  reference_files:
+    - ~/geometry-of-reading/src/content/chapters/ch16-cdm-from-scratch.mdx
+    - ~/geometry-of-reading/src/content/chapters/ch17-tables-and-chemistry-metrics.mdx
+gold:
+  family: astro_book
+  required_components:
+    - "<NoteBox"
+    - "<WorkedExample"

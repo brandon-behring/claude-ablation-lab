@@ -1,0 +1,37 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; latex_guide family).
+# Topic (survival-analysis PD modeling) has no dedicated treatment in the references
+# (grep 2026-07-06: passing mentions only).
+id: t9_survival_pd
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, latex-guide]
+prompt: |
+  You are writing for Volume 18 (Credit Risk) of a CFA-style data-science
+  interview-prep series. Write a NEW section titled "Survival-Analysis PD Models:
+  Discrete-Time Hazards for Loan Default" that the volume does not yet have. Cover:
+  - why a point-in-time binary PD model discards timing information that pricing
+    and IFRS 9 lifetime-ECL staging need, and what a hazard framing recovers;
+  - the discrete-time hazard setup (person-period data construction, logistic
+    hazard with time dummies, censoring) and how it maps onto familiar scorecard
+    tooling;
+  - vintage/seasoning effects and macro covariates: what a hazard model captures
+    that a static scorecard cannot, and the validation pitfalls (leakage via
+    post-origination covariates).
+  Match the volume's established voice and conventions exactly as demonstrated in
+  the reference material below: \los{ID}{bloom-verb}{statement} learning outcomes
+  (at least 2, with new IDs continuing the volume's scheme), \companytags{...},
+  Tufte margin notes (\marginnote) or an interviewcontext box, biblatex citations
+  (\textcite/\autocite), and LaTeX sectioning. Target 900-1400 words. Return ONLY
+  the LaTeX source of the section — no preamble, no commentary before or after.
+params:
+  corpus_family: latex_guide
+  max_reference_chars: 6000
+  reference_files:
+    - ~/interview_prep_series/vol18_credit_risk/chapters/04_scorecard_development.tex
+    - ~/interview_prep_series/vol18_credit_risk/chapters/05_ml_credit_models.tex
+gold:
+  family: latex_guide
+  min_los: 2

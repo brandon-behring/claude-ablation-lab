@@ -1,0 +1,36 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; astro_book family).
+# Topic (sliding-window attention) verified ABSENT corpus-wide (grep 2026-07-06).
+id: t9_sliding_window
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, astro-book]
+prompt: |
+  You are writing for a formal Definition-Theorem-Proof guide to transformer
+  mathematics (Astro/MDX). Write a NEW section titled "Sliding-Window Attention"
+  that the guide does not yet have. Cover, in the guide's formal register:
+  - a precise definition of the banded attention mask and the induced
+    complexity bound per layer (state and prove the O(n·w) result);
+  - a theorem on the receptive field: after L layers with window w, information
+    can propagate at most L·w positions — prove it by induction and note the
+    dilated/global-token remedies;
+  - a short discussion of what the locality assumption costs: which dependencies
+    a fixed window provably cannot model, and how that motivates hybrid layouts
+    (e.g. alternating local/global layers).
+  Match the guide's established voice and MDX conventions exactly as demonstrated
+  in the reference material below: <Theorem> blocks with kind="definition" /
+  theorem + proofs, the guide's notation, and the same heading discipline. Target
+  900-1400 words. Return ONLY the MDX source of the section — no frontmatter, no
+  commentary before or after.
+params:
+  corpus_family: astro_book
+  max_reference_chars: 6000
+  reference_files:
+    - ~/mathematical-guides-transformers/src/content/transformers/00-notation.mdx
+    - ~/mathematical-guides-transformers/src/content/transformers/02-attention.mdx
+gold:
+  family: astro_book
+  required_components:
+    - "<Theorem"

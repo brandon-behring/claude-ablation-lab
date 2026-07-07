@@ -1,0 +1,38 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; astro_book family).
+# Topic (handoff contracts) verified ABSENT from both reference chapters (grep 2026-07-06).
+id: t9_subagent_handoff
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, astro-book]
+prompt: |
+  You are writing for "Agentic Systems Design", an Astro/MDX engineering book on
+  building agent systems. Write a NEW chapter section titled "Handoff Contracts:
+  What Crosses the Orchestrator/Sub-Agent Boundary" that the book does not yet
+  have. Cover:
+  - the handoff as a contract: task framing, success criteria, and context the
+    sub-agent needs vs context that would bias or bloat it;
+  - the return path: why a sub-agent's final message is an interface (structured
+    findings, not transcript dumps), and how orchestrators should treat partial
+    or failed returns;
+  - failure patterns: over-delegation of trivial lookups, under-specified tasks
+    that force the sub-agent to guess, and duplicated work between parent and
+    child.
+  Match the book's established voice and MDX conventions exactly as demonstrated
+  in the reference material below: the same heading discipline, <Citation>
+  source-grounded claims, and <MarginNote> asides. Target 900-1400 words. Return
+  ONLY the MDX source of the section — no frontmatter, no commentary before or
+  after.
+params:
+  corpus_family: astro_book
+  max_reference_chars: 6000
+  reference_files:
+    - ~/claude-books/agentic-systems-design/src/content/chapters/ch18-sub-agents.mdx
+    - ~/claude-books/agentic-systems-design/src/content/chapters/ch19-multi-agent.mdx
+gold:
+  family: astro_book
+  required_components:
+    - "<Citation"
+    - "<MarginNote"

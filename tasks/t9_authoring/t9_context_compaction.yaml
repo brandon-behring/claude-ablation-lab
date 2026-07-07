@@ -1,0 +1,38 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; astro_book family).
+# Topic (context compaction) verified ABSENT from both reference chapters (grep 2026-07-06).
+id: t9_context_compaction
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, astro-book]
+prompt: |
+  You are writing for "Agentic Systems Design", an Astro/MDX engineering book on
+  building agent systems. Write a NEW chapter section titled "Context Compaction:
+  Summarize-and-Continue as an Engineering Discipline" that the book does not yet
+  have. Cover:
+  - what compaction is (summarize the transcript, rebuild the window, continue)
+    and why long-running agents need it even with large context windows;
+  - what must survive a compaction boundary (task state, constraints, file
+    references, user decisions) vs what can be dropped, and how lossy summaries
+    corrupt later turns;
+  - design rules: compaction-aware prompts, externalizing state to files/memory
+    so the summary is a pointer not an archive, and testing an agent across a
+    forced compaction.
+  Match the book's established voice and MDX conventions exactly as demonstrated
+  in the reference material below: the same heading discipline, <Citation>
+  source-grounded claims, and <MarginNote> asides. Target 900-1400 words. Return
+  ONLY the MDX source of the section — no frontmatter, no commentary before or
+  after.
+params:
+  corpus_family: astro_book
+  max_reference_chars: 6000
+  reference_files:
+    - ~/claude-books/agentic-systems-design/src/content/chapters/ch08-context-rot.mdx
+    - ~/claude-books/agentic-systems-design/src/content/chapters/ch10-context-memory.mdx
+gold:
+  family: astro_book
+  required_components:
+    - "<Citation"
+    - "<MarginNote"

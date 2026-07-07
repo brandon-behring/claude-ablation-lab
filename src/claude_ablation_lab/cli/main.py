@@ -600,5 +600,331 @@ def _print_estimate(est: Estimate) -> None:
     )
 
 
+# --- the pairwise-judge phase (t9) --------------------------------------------------
+
+_JUDGE_CONTROLS_ROOT = Path(__file__).resolve().parents[3] / "examples" / "judge-controls"
+
+
+def _judge_instances() -> list:  # type: ignore[type-arg]
+    from claude_ablation_lab.judges import JUDGE_NAMES, get_judge
+
+    return [get_judge(name) for name in JUDGE_NAMES]
+
+
+def _print_controls(report: object) -> None:
+    from claude_ablation_lab.judge_orchestrate import ControlsReport
+
+    if not isinstance(report, ControlsReport):  # pragma: no cover — narrowing only
+        raise TypeError("expected a ControlsReport")
+    table = Table(title="judge validity controls")
+    table.add_column("judge")
+    table.add_column("control")
+    table.add_column("pass")
+    table.add_column("detail")
+    for judge_id, outcomes in sorted(report.per_judge.items()):
+        for outcome in outcomes:
+            table.add_row(
+                judge_id,
+                outcome.name,
+                "[green]yes[/green]" if outcome.passed else "[red]NO[/red]",
+                outcome.detail,
+            )
+    console.print(table)
+
+
+@app.command()
+def judge(
+    suite: Annotated[Path, typer.Argument(help="Task-suite dir or a single task YAML (t9)")],
+    ledger: Annotated[
+        Path, typer.Option(help="CONTESTANT ledger the outputs are read from")
+    ] = Path("results/judge-pilot.jsonl"),
+    judge_ledger: Annotated[Path, typer.Option(help="Judge ledger (JSONL) to append to")] = Path(
+        "results/judge.jsonl"
+    ),
+    controls_only: Annotated[
+        bool,
+        typer.Option("--controls-only", help="Run/score the validity controls, then stop"),
+    ] = False,
+    baseline: Annotated[
+        str | None,
+        typer.Option(
+            help="Override the measured-cheapest baseline as 'model/effort' "
+            "(record the reason in the design doc — the default is deterministic and "
+            "quality-blind on purpose)"
+        ),
+    ] = None,
+    pairs: Annotated[
+        str, typer.Option(help="Pairing scheme: baseline (success criterion) / all")
+    ] = "baseline",
+    max_workers: Annotated[int, typer.Option(help="Concurrent judge CLI calls")] = 4,
+    timeout_s: Annotated[float, typer.Option(help="Per-call judge timeout")] = 240.0,
+    task: Annotated[list[str] | None, typer.Option(help="Only judge these task ids")] = None,
+) -> None:
+    """Pairwise-judge stored contestant outputs (codex + gemini; controls gate first)."""
+    from claude_ablation_lab.judge_ledger import load_judge_rows
+    from claude_ablation_lab.judge_orchestrate import (
+        JudgePassHaltedError,
+        enumerate_pairs,
+        evaluate_controls,
+        load_control_pairs,
+        pick_baseline,
+        run_judge_pass,
+    )
+    from claude_ablation_lab.ledger import load_rows
+    from claude_ablation_lab.provenance import gather_provenance
+
+    judges = _judge_instances()
+    versions = {j.judge_id: j.version for j in judges}
+    transcripts = judge_ledger.parent / "judge_transcripts"
+    harness_sha = gather_provenance().harness_sha
+
+    if controls_only:
+        control_pairs = load_control_pairs(_JUDGE_CONTROLS_ROOT)
+        console.print(
+            f"[bold]controls gate[/bold] — {len(control_pairs)} pairs × 2 orders × "
+            f"{len(judges)} judges (resumable)"
+        )
+        try:
+            summary = run_judge_pass(
+                control_pairs,
+                judges,
+                ledger_path=judge_ledger,
+                transcripts_dir=transcripts,
+                timeout_s=timeout_s,
+                max_workers=max_workers,
+                harness_sha=harness_sha,
+            )
+        except JudgePassHaltedError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(2) from None
+        console.print(
+            f"controls pass: {summary.n_ok} ok, {summary.n_failed_final} failed, "
+            f"{summary.n_skipped_resume} resumed"
+        )
+        report = evaluate_controls(load_judge_rows(judge_ledger), versions)
+        _print_controls(report)
+        if not report.passed:
+            console.print(
+                "[red]controls FAILED — do not judge real pairs.[/red] Inspect "
+                f"{transcripts}, revise the template (bump pj-v*), re-run --controls-only."
+            )
+            raise typer.Exit(2)
+        console.print("[green]controls passed for every judge — real judging is unlocked.[/green]")
+        return
+
+    # The gate: real pairs refuse to run on unpassed controls (stored rows only).
+    report = evaluate_controls(load_judge_rows(judge_ledger), versions)
+    if not report.passed:
+        _print_controls(report)
+        console.print(
+            "[red]validity controls have not passed for every judge at its current "
+            "judge_version[/red] — run `ablation judge ... --controls-only` first."
+        )
+        raise typer.Exit(2)
+
+    tasks = _load_suite(suite, task)
+    contestant_rows = load_rows(ledger)
+    chosen = baseline or pick_baseline(contestant_rows, {t.id for t in tasks})
+    origin = "override" if baseline else "measured cheapest (cost-only, frozen pre-judging)"
+    console.print(f"baseline: [bold]{chosen}[/bold] ({origin})")
+
+    pair_specs, dropped = enumerate_pairs(tasks, contestant_rows, baseline=chosen, pairs=pairs)
+    for reason in dropped:
+        console.print(f"[yellow]dropped pair:[/yellow] {reason}")
+    if not pair_specs:
+        console.print("[red]no judgeable pairs[/red]")
+        raise typer.Exit(2)
+    console.print(
+        f"[bold]privacy:[/bold] contestant outputs + reference excerpts in "
+        f"{len(pair_specs)} pairs will be sent to OpenAI (codex) and Google (gemini)."
+    )
+    try:
+        summary = run_judge_pass(
+            pair_specs,
+            judges,
+            ledger_path=judge_ledger,
+            transcripts_dir=transcripts,
+            timeout_s=timeout_s,
+            max_workers=max_workers,
+            harness_sha=harness_sha,
+        )
+    except JudgePassHaltedError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2) from None
+    console.print(
+        f"judge pass: {summary.n_ok} ok, {summary.n_failed_final} failed, "
+        f"{summary.n_skipped_resume} resumed of {summary.n_calls_planned} calls"
+    )
+    _print_judge_report(load_judge_rows(judge_ledger), contestant_rows, baseline=chosen)
+
+
+@app.command("judge-report")
+def judge_report_cmd(
+    judge_ledger: Annotated[Path, typer.Argument(help="Judge ledger (JSONL)")],
+    ledger: Annotated[
+        Path, typer.Option(help="CONTESTANT ledger for the cost/latency/token joins")
+    ] = Path("results/judge-pilot.jsonl"),
+    baseline: Annotated[
+        str | None, typer.Option(help="Baseline config (default: measured cheapest)")
+    ] = None,
+    primary: Annotated[
+        str | None, typer.Option(help="Predeclared primary contrast candidate")
+    ] = None,
+) -> None:
+    """Preference verdicts per contrast: W/L/T, sign-flip p, cost× and length× context."""
+    from claude_ablation_lab.judge_analyze import DEFAULT_PRIMARY
+    from claude_ablation_lab.judge_ledger import REAL_PAIR, load_judge_rows
+    from claude_ablation_lab.judge_orchestrate import pick_baseline
+    from claude_ablation_lab.ledger import load_rows
+
+    judge_rows = load_judge_rows(judge_ledger)
+    contestant_rows = load_rows(ledger)
+    if not any(r.control == REAL_PAIR for r in judge_rows):
+        console.print(f"[yellow]no real judged pairs in {judge_ledger}[/yellow]")
+        raise typer.Exit(1)
+    task_ids = {r.task_id for r in judge_rows if r.control == REAL_PAIR}
+    chosen = baseline or pick_baseline(contestant_rows, task_ids)
+    _print_judge_report(
+        judge_rows, contestant_rows, baseline=chosen, primary=primary or DEFAULT_PRIMARY
+    )
+
+
+@app.command("judge-spotcheck")
+def judge_spotcheck(
+    suite: Annotated[Path, typer.Argument(help="Task-suite dir (to rebuild pair texts)")],
+    judge_ledger: Annotated[Path, typer.Option(help="Judge ledger (JSONL)")] = Path(
+        "results/judge.jsonl"
+    ),
+    ledger: Annotated[Path, typer.Option(help="CONTESTANT ledger")] = Path(
+        "results/judge-pilot.jsonl"
+    ),
+    out: Annotated[Path, typer.Option(help="Blinded spot-check file to write")] = Path(
+        "results/judge_spotcheck.md"
+    ),
+    n: Annotated[int, typer.Option(help="Pairs to sample")] = 10,
+    seed: Annotated[int, typer.Option(help="Sampling seed")] = 42,
+    baseline: Annotated[str | None, typer.Option(help="Baseline config")] = None,
+    decisive_only: Annotated[
+        bool,
+        typer.Option(
+            "--decisive-only/--all-pairs",
+            help="Sample only decisive-consensus pairs (tie-excluded gate; default)",
+        ),
+    ] = True,
+    stratify: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--stratify", help="Contestant config to guarantee in the sample (repeatable)"
+        ),
+    ] = None,
+    score: Annotated[
+        Path | None,
+        typer.Option("--score", help="Score a FILLED spot-check file instead of writing one"),
+    ] = None,
+) -> None:
+    """Write a blinded ~10-pair human spot-check file, or score the filled one (>=80% to headline)."""
+    from claude_ablation_lab.judge_ledger import load_judge_rows
+    from claude_ablation_lab.judge_orchestrate import (
+        enumerate_pairs,
+        pick_baseline,
+        sample_spotcheck,
+        score_spotcheck,
+    )
+    from claude_ablation_lab.ledger import load_rows
+
+    judge_rows = load_judge_rows(judge_ledger)
+    if score is not None:
+        report = score_spotcheck(score, judge_rows)
+        if report.n_strict_scored == 0:
+            console.print("[yellow]no filled verdicts found in the spot-check file[/yellow]")
+            raise typer.Exit(1)
+        gate = report.agreement
+        if gate is None:
+            console.print(
+                "[yellow]no decisive-consensus pairs among the filled verdicts — the gate "
+                "cannot be scored (every answered pair was a consensus tie)[/yellow]"
+            )
+            raise typer.Exit(1)
+        color = "green" if gate >= 0.8 else "red"
+        console.print(
+            f"spot-check agreement (decisive, tie-excluded — the gate): "
+            f"[{color}]{report.n_agree}/{report.n_scored} ({gate:.0%})[/{color}] "
+            "— ≥80% required to headline the judge verdicts"
+        )
+        strict = report.strict_agreement or 0.0
+        console.print(
+            f"  context: strict 3-way {report.n_strict_agree}/{report.n_strict_scored} "
+            f"({strict:.0%}); human called tie on {report.n_human_tie_on_decisive} "
+            "decisive pair(s)"
+        )
+        return
+
+    tasks = _load_suite(suite, None)
+    contestant_rows = load_rows(ledger)
+    chosen = baseline or pick_baseline(contestant_rows, {t.id for t in tasks})
+    pair_specs, _dropped = enumerate_pairs(tasks, contestant_rows, baseline=chosen, pairs="all")
+    path = sample_spotcheck(
+        judge_rows,
+        pair_specs,
+        n=n,
+        seed=seed,
+        out_path=out,
+        decisive_only=decisive_only,
+        stratify=tuple(stratify or ()),
+    )
+    console.print(
+        f"wrote [bold]{path}[/bold] — fill each `your_verdict:` blind, then re-run "
+        "with --score <file>"
+    )
+
+
+def _print_judge_report(
+    judge_rows: list,  # type: ignore[type-arg]
+    contestant_rows: list,  # type: ignore[type-arg]
+    *,
+    baseline: str,
+    primary: str | None = None,
+) -> None:
+    from claude_ablation_lab.judge_analyze import DEFAULT_PRIMARY, judge_report
+
+    summaries = judge_report(
+        judge_rows, contestant_rows, baseline=baseline, primary=primary or DEFAULT_PRIMARY
+    )
+    if not summaries:
+        console.print("[yellow]no judged contrasts against the baseline[/yellow]")
+        return
+    table = Table(title=f"pairwise-judge verdicts vs {baseline} (dr-v1)")
+    for col in ("contrast", "W/L/T", "score", "p", "real?", "cost×", "len×", "noise", "note"):
+        table.add_column(col)
+    for s in summaries:
+        marker = " ★" if s.primary else ""
+        p_txt = "—" if s.p_value is None else f"{s.p_value:.3g} (n≠0: {s.n_nonzero})"
+        if s.p_adjusted is not None:
+            p_txt += f" → {s.p_adjusted:.3g} adj"
+        disagree = (
+            "—" if s.cross_judge_disagree_rate is None else f"{s.cross_judge_disagree_rate:.0%}"
+        )
+        order_txt = " ".join(f"{j}:{r:.0%}" for j, r in sorted(s.order_disagree_rate.items()))
+        table.add_row(
+            f"{s.config}{marker}",
+            f"{s.wins}/{s.losses}/{s.ties} of {s.n_scored}",
+            "—" if s.mean_score is None else f"{s.mean_score:+.2f}",
+            p_txt,
+            "[green]yes[/green]" if s.real else "no",
+            "—" if s.cost_multiple is None else f"{s.cost_multiple:.1f}×",
+            "—" if s.mean_length_ratio is None else f"{s.mean_length_ratio:.2f}×",
+            f"flip {order_txt} | xjudge {disagree}",
+            s.note,
+        )
+    console.print(table)
+    console.print(
+        "[dim]★ = predeclared primary contrast (others are Holm-corrected, exploratory); "
+        "score = mean per-prompt preference in [-1,+1] (+ favors the contrast config); "
+        "p = exact sign-flip over per-prompt scores; len× > 1 with a win is the verbosity "
+        "tripwire — re-read length-stratified before believing it. Preference, not "
+        "correctness.[/dim]"
+    )
+
+
 if __name__ == "__main__":
     app()

@@ -10,7 +10,15 @@ from claude_ablation_lab.graders import GRADER_NAMES, get_grader
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
-    "name", ["anchor", "anchor_strict", "validator", "exact_match", "exact_match_set"]
+    "name",
+    [
+        "anchor",
+        "anchor_strict",
+        "validator",
+        "exact_match",
+        "exact_match_set",
+        "authoring_conventions",
+    ],
 )
 def test_get_grader_returns_a_grader(name: str) -> None:
     grader = get_grader(name)
@@ -40,6 +48,7 @@ def test_grader_names_cover_seed_graders_and_anchor_strict() -> None:
         "books_validate",
         "exact_match",
         "exact_match_set",
+        "authoring_conventions",
     }
 
 

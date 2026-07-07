@@ -217,6 +217,52 @@ def _books_agent_prompt() -> str:
     )
 
 
+def _reference_sha(paths: list[Path]) -> str:
+    """16-hex hash of the FULL reference-file contents (not the truncated excerpts) —
+    an upstream corpus edit must flip ``spec_sha`` even when the excerpt is unchanged."""
+    h = hashlib.sha256()
+    for p in paths:
+        h.update(str(p.name).encode("utf-8"))
+        h.update(p.read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _prepare_authoring(task: Task) -> Prepared:
+    """t9: fold reference excerpts from the author's LOCAL corpora into the prompt.
+
+    The committed YAML carries paths + prompt text only (the ``$T1_HOLDOUT_PATH``
+    external-data pattern) — the corpus content itself is never committed. Each
+    reference file is truncated to ``params.max_reference_chars`` in the prompt, but
+    the *full* contents are hashed into ``gold["reference_sha"]`` so a corpus edit
+    changes ``spec_sha`` and a stored run is never silently reused across it.
+    """
+    raw_refs = task.params.get("reference_files")
+    if not raw_refs or not isinstance(raw_refs, (list, tuple)):
+        raise ValueError(f"task {task.id!r}: params.reference_files missing or empty")
+    cap = int(task.params.get("max_reference_chars", 6000))
+    paths = [Path(os.path.expanduser(str(r))) for r in raw_refs]
+    missing = [p for p in paths if not p.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            f"task {task.id!r}: reference file(s) not found: "
+            f"{', '.join(str(p) for p in missing)} — the t9 authoring family requires "
+            "the author's local corpora; it cannot run in CI or on other machines"
+        )
+    sections = []
+    for p in paths:
+        text = p.read_text(encoding="utf-8", errors="replace")
+        excerpt = text[:cap]
+        marker = "" if len(text) <= cap else f"\n[... truncated at {cap} chars]"
+        sections.append(f"### {p.name}\n\n{excerpt}{marker}")
+    prompt = (
+        f"{task.prompt}\n\n"
+        "## Reference material (voice + conventions — match these)\n\n" + "\n\n".join(sections)
+    )
+    gold = dict(task.gold)
+    gold["reference_sha"] = _reference_sha(paths)
+    return Prepared(prompt=prompt, gold=gold)
+
+
 _PREPARERS = {
     "classification": _prepare_classification,
     "validator": _prepare_validator,
@@ -225,6 +271,7 @@ _PREPARERS = {
     "exact_match": _prepare_anchor,  # fully static single-turn: prompt + gold from the YAML
     "exact_match_set": _prepare_anchor,  # same static prep; multi-item fraction grader
     "books_validate": _prepare_books_validate,
+    "authoring_conventions": _prepare_authoring,
 }
 
 

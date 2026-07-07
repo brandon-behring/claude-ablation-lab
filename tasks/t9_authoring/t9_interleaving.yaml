@@ -1,0 +1,37 @@
+# T9 — open-ended guide-section authoring (LLM-judge pilot; latex_guide family).
+# The requested topic is verified ABSENT from the reference files (grep 2026-07-06):
+# the references anchor voice + conventions, they do not contain the answer.
+# Reference excerpts are folded in at prepare time from the author's LOCAL corpus
+# (never committed); missing corpus is a hard prepare error, so this family cannot
+# run in CI or on other machines.
+id: t9_interleaving
+domain: authoring
+grader: authoring_conventions
+mode: single
+infra_repo: null
+timeout_s: 600
+tags: [authoring, open-ended, judge-pilot, latex-guide]
+prompt: |
+  You are writing for Volume 1 (Experimentation) of a CFA-style data-science
+  interview-prep series. Write a NEW section titled "Interleaving Experiments for
+  Ranking Evaluation" that the volume does not yet have. Cover:
+  - why interleaving (team-draft / balanced) detects ranking preferences with far
+    smaller samples than user-level A/B tests, and the sensitivity trade-off;
+  - the team-draft interleaving algorithm and its credit-assignment rule;
+  - when interleaving verdicts disagree with A/B revenue metrics and how to
+    reconcile them in practice.
+  Match the volume's established voice and conventions exactly as demonstrated in
+  the reference material below: \los{ID}{bloom-verb}{statement} learning outcomes
+  (at least 2, with new EXP-x.y IDs), \companytags{...}, Tufte margin notes
+  (\marginnote) or an interviewcontext box, biblatex citations
+  (\textcite/\autocite), and LaTeX sectioning. Target 900-1400 words. Return ONLY
+  the LaTeX source of the section — no preamble, no commentary before or after.
+params:
+  corpus_family: latex_guide
+  max_reference_chars: 6000
+  reference_files:
+    - ~/interview_prep_series/vol01_experimentation/chapters/02_randomization.tex
+    - ~/interview_prep_series/vol01_experimentation/chapters/05_ab_test_design.tex
+gold:
+  family: latex_guide
+  min_los: 2

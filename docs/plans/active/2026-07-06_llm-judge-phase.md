@@ -1,7 +1,15 @@
 # LLM-judge phase — pairwise preference for open-ended work
 
-> Status: **planned** (2026-07-06, scheduled by the independent audit —
-> `docs/audits/2026-07-06_independent-audit.md`). Not yet implemented.
+> Status: **pilot complete** (2026-07-06; results in
+> `docs/design/2026-07-06_llm-judge-implementation.md` — fable/high ★ and
+> fable/low REAL over the sonnet/high baseline; opus/high not; verdicts pending
+> the human spot-check gate). Scheduled by the
+> independent audit — `docs/audits/2026-07-06_independent-audit.md`. Build
+> decisions: `docs/design/2026-07-06_llm-judge-implementation.md`. Two design
+> deltas from this doc, both user-decided at build time: the judges are
+> CROSS-VENDOR (OpenAI codex + Gemini via agy — dissolves the judge≠contestant
+> conflict, so opus/high STAYS a contestant), and the prompts are drawn from the
+> author's real local corpora via prepare-time reference assembly.
 
 ## Why this phase exists
 
