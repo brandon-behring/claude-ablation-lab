@@ -4,6 +4,7 @@ contestant rows are canned; no subprocess, no Claude."""
 
 from __future__ import annotations
 
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,10 +12,11 @@ from pathlib import Path
 import pytest
 
 from claude_ablation_lab.judge import JudgeCall
-from claude_ablation_lab.judge_ledger import load_judge_rows
+from claude_ablation_lab.judge_ledger import JudgeRow, load_judge_rows
 from claude_ablation_lab.judge_orchestrate import (
     JudgePassHaltedError,
     PairSpec,
+    _consensus_by_pair,
     enumerate_pairs,
     pick_baseline,
     run_judge_pass,
@@ -372,31 +374,151 @@ def test_circuit_breaker_halts_on_consecutive_failures(tmp_path: Path) -> None:
     assert rows and all(r.status == "error" for r in rows)
 
 
-# --- spot-check round trip -----------------------------------------------------------
+# --- spot-check: consensus, decisive-gate sampling, dual-metric scoring ---------------
+
+
+def _pair(task_id: str, config_a: str = "claude-fable-5/low") -> PairSpec:
+    return PairSpec(
+        task_id=task_id,
+        epoch=0,
+        config_a=config_a,
+        config_b="sonnet/high",
+        spec_sha="s" * 16,
+        assignment="Write the section.",
+        output_a=f"{config_a} text",
+        output_b="sonnet text",
+        output_sha_a="a" * 16,
+        output_sha_b="b" * 16,
+    )
+
+
+def _judge_rows_for(spec: PairSpec, canonical: dict[str, str]) -> list[JudgeRow]:
+    """Both-order rows per judge that debias to the given canonical verdict.
+
+    Storing the same canonical verdict on the ``ab`` and ``ba`` rows makes
+    ``debias`` return it; disagreeing judges force a consensus tie.
+    """
+    return [
+        JudgeRow(
+            task_id=spec.task_id,
+            epoch=spec.epoch,
+            config_a=spec.config_a,
+            config_b=spec.config_b,
+            order=order,
+            judge_id=judge_id,
+            judge_version=f"pj-v1+vp-v1/{judge_id}:fake",
+            spec_sha=spec.spec_sha,
+            output_sha_a=spec.output_sha_a,
+            output_sha_b=spec.output_sha_b,
+            status="ok",
+            verdict=verdict,
+        )
+        for judge_id, verdict in canonical.items()
+        for order in ("ab", "ba")
+    ]
+
+
+def _fill_pair1(text: str, target: str) -> str:
+    """Fill pair 1's verdict so it maps to canonical ``target`` (a|b|tie)."""
+    order = re.search(r"<!-- pair:1 key:[^ ]+ order:(ab|ba) -->", text).group(1)  # type: ignore[union-attr]
+    if target == "tie":
+        raw = "tie"
+    elif order == "ab":
+        raw = "A" if target == "a" else "B"
+    else:
+        raw = "B" if target == "a" else "A"
+    return text.replace("your_verdict:  <!-- pair 1: A | B | tie -->", f"your_verdict: {raw}")
 
 
 @pytest.mark.unit
-def test_spotcheck_write_and_score_round_trip(tmp_path: Path) -> None:
-    judge_a, judge_b = FakeJudge("codex"), FakeJudge("gemini")
-    pairs = [_one_pair()]
-    kwargs: dict[str, object] = {
-        "ledger_path": tmp_path / "judge.jsonl",
-        "transcripts_dir": tmp_path / "t",
-        "max_workers": 1,
-    }
-    run_judge_pass(pairs, [judge_a, judge_b], **kwargs)
-    rows = load_judge_rows(tmp_path / "judge.jsonl")
-    out = sample_spotcheck(rows, pairs, n=1, seed=7, out_path=tmp_path / "spot.md")
-    text = out.read_text(encoding="utf-8")
-    assert "your_verdict:" in text
-    assert "fable text" in text and "sonnet text" in text
-    assert "claude-fable-5" not in text.replace("<!--", "").split("-->")[-1] or True
+def test_consensus_by_pair_decisive_and_forced_tie() -> None:
+    dec = _pair("t9_fake_0")
+    key = (dec.task_id, dec.epoch, dec.config_a, dec.config_b)
+    assert _consensus_by_pair(_judge_rows_for(dec, {"codex": "a", "gemini": "a"}))[key] == "a"
+    # judges disagree -> forced consensus tie (judge noise, not a property of outputs)
+    assert _consensus_by_pair(_judge_rows_for(dec, {"codex": "a", "gemini": "b"}))[key] == "tie"
 
-    # Both fake judges said "A" for whatever came first -> debiased tie per judge
-    # -> consensus tie. A human answering tie agrees; answering A disagrees.
-    filled = text.replace("your_verdict:  <!-- pair 1: A | B | tie -->", "your_verdict: tie")
-    (tmp_path / "spot_filled.md").write_text(filled, encoding="utf-8")
-    report = score_spotcheck(tmp_path / "spot_filled.md", rows)
-    assert report.n_scored == 1
-    assert report.n_agree == 1
-    assert report.agreement == 1.0
+
+@pytest.mark.unit
+def test_spotcheck_decisive_only_excludes_ties(tmp_path: Path) -> None:
+    dec, tie = _pair("t9_dec"), _pair("t9_tie")
+    rows = _judge_rows_for(dec, {"codex": "a", "gemini": "a"}) + _judge_rows_for(
+        tie, {"codex": "a", "gemini": "b"}
+    )
+    out = sample_spotcheck(rows, [dec, tie], n=10, seed=1, out_path=tmp_path / "s.md")
+    keys = re.findall(r"key:([^ ]+) order:", out.read_text(encoding="utf-8"))
+    assert len(keys) == 1 and keys[0].startswith("t9_dec")  # the tie pair is not sampled
+
+
+@pytest.mark.unit
+def test_spotcheck_decisive_only_raises_when_all_ties(tmp_path: Path) -> None:
+    tie = _pair("t9_tie")
+    rows = _judge_rows_for(tie, {"codex": "a", "gemini": "b"})
+    with pytest.raises(ValueError, match="no decisive"):
+        sample_spotcheck(rows, [tie], n=1, seed=1, out_path=tmp_path / "s.md")
+
+
+@pytest.mark.unit
+def test_spotcheck_gate_agrees_when_human_matches_decisive(tmp_path: Path) -> None:
+    dec = _pair("t9_fake_0")
+    rows = _judge_rows_for(dec, {"codex": "a", "gemini": "a"})
+    out = sample_spotcheck(rows, [dec], n=1, seed=3, out_path=tmp_path / "s.md")
+    (tmp_path / "f.md").write_text(
+        _fill_pair1(out.read_text(encoding="utf-8"), "a"), encoding="utf-8"
+    )
+    rep = score_spotcheck(tmp_path / "f.md", rows)
+    assert rep.n_scored == 1 and rep.n_agree == 1 and rep.agreement == 1.0
+    assert rep.n_strict_scored == 1 and rep.n_strict_agree == 1
+
+
+@pytest.mark.unit
+def test_spotcheck_human_tie_on_decisive_pair_is_a_miss(tmp_path: Path) -> None:
+    dec = _pair("t9_fake_0")
+    rows = _judge_rows_for(dec, {"codex": "a", "gemini": "a"})
+    out = sample_spotcheck(rows, [dec], n=1, seed=3, out_path=tmp_path / "s.md")
+    (tmp_path / "f.md").write_text(
+        _fill_pair1(out.read_text(encoding="utf-8"), "tie"), encoding="utf-8"
+    )
+    rep = score_spotcheck(tmp_path / "f.md", rows)
+    assert rep.n_scored == 1 and rep.n_agree == 0 and rep.agreement == 0.0
+    assert rep.n_human_tie_on_decisive == 1
+    assert rep.n_strict_scored == 1 and rep.n_strict_agree == 0  # strict also misses
+
+
+@pytest.mark.unit
+def test_spotcheck_strict_counts_tie_agreement_while_gate_excludes_it(tmp_path: Path) -> None:
+    tie = _pair("t9_fake_0")
+    rows = _judge_rows_for(tie, {"codex": "a", "gemini": "b"})  # consensus tie
+    out = sample_spotcheck(
+        rows, [tie], n=1, seed=2, decisive_only=False, out_path=tmp_path / "s.md"
+    )
+    (tmp_path / "f.md").write_text(
+        _fill_pair1(out.read_text(encoding="utf-8"), "tie"), encoding="utf-8"
+    )
+    rep = score_spotcheck(tmp_path / "f.md", rows)
+    assert rep.n_strict_scored == 1 and rep.n_strict_agree == 1  # tie == tie, strict view
+    assert rep.n_scored == 0 and rep.agreement is None  # the gate excludes the tie pair
+
+
+@pytest.mark.unit
+def test_spotcheck_stratify_guarantees_headline_contrast(tmp_path: Path) -> None:
+    specs: list[PairSpec] = []
+    rows: list[JudgeRow] = []
+    for i in range(3):
+        fh = _pair(f"t9_fh_{i}", config_a="claude-fable-5/high")
+        op = _pair(f"t9_op_{i}", config_a="opus/high")
+        specs += [fh, op]
+        rows += _judge_rows_for(fh, {"codex": "a", "gemini": "a"})
+        rows += _judge_rows_for(op, {"codex": "a", "gemini": "a"})
+    out = sample_spotcheck(
+        rows,
+        specs,
+        n=4,
+        seed=5,
+        stratify=("claude-fable-5/high",),
+        min_per_stratum=3,
+        out_path=tmp_path / "s.md",
+    )
+    keys = re.findall(r"key:([^ ]+) order:", out.read_text(encoding="utf-8"))
+    assert len(keys) == 4
+    assert sum("claude-fable-5/high" in k for k in keys) >= 3  # stratum guaranteed

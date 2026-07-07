@@ -804,6 +804,19 @@ def judge_spotcheck(
     n: Annotated[int, typer.Option(help="Pairs to sample")] = 10,
     seed: Annotated[int, typer.Option(help="Sampling seed")] = 42,
     baseline: Annotated[str | None, typer.Option(help="Baseline config")] = None,
+    decisive_only: Annotated[
+        bool,
+        typer.Option(
+            "--decisive-only/--all-pairs",
+            help="Sample only decisive-consensus pairs (tie-excluded gate; default)",
+        ),
+    ] = True,
+    stratify: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--stratify", help="Contestant config to guarantee in the sample (repeatable)"
+        ),
+    ] = None,
     score: Annotated[
         Path | None,
         typer.Option("--score", help="Score a FILLED spot-check file instead of writing one"),
@@ -822,14 +835,27 @@ def judge_spotcheck(
     judge_rows = load_judge_rows(judge_ledger)
     if score is not None:
         report = score_spotcheck(score, judge_rows)
-        if report.n_scored == 0:
+        if report.n_strict_scored == 0:
             console.print("[yellow]no filled verdicts found in the spot-check file[/yellow]")
             raise typer.Exit(1)
-        pct = report.agreement or 0.0
-        color = "green" if pct >= 0.8 else "red"
+        gate = report.agreement
+        if gate is None:
+            console.print(
+                "[yellow]no decisive-consensus pairs among the filled verdicts — the gate "
+                "cannot be scored (every answered pair was a consensus tie)[/yellow]"
+            )
+            raise typer.Exit(1)
+        color = "green" if gate >= 0.8 else "red"
         console.print(
-            f"spot-check agreement: [{color}]{report.n_agree}/{report.n_scored} "
-            f"({pct:.0%})[/{color}] — ≥80% required to headline the judge verdicts"
+            f"spot-check agreement (decisive, tie-excluded — the gate): "
+            f"[{color}]{report.n_agree}/{report.n_scored} ({gate:.0%})[/{color}] "
+            "— ≥80% required to headline the judge verdicts"
+        )
+        strict = report.strict_agreement or 0.0
+        console.print(
+            f"  context: strict 3-way {report.n_strict_agree}/{report.n_strict_scored} "
+            f"({strict:.0%}); human called tie on {report.n_human_tie_on_decisive} "
+            "decisive pair(s)"
         )
         return
 
@@ -837,7 +863,15 @@ def judge_spotcheck(
     contestant_rows = load_rows(ledger)
     chosen = baseline or pick_baseline(contestant_rows, {t.id for t in tasks})
     pair_specs, _dropped = enumerate_pairs(tasks, contestant_rows, baseline=chosen, pairs="all")
-    path = sample_spotcheck(judge_rows, pair_specs, n=n, seed=seed, out_path=out)
+    path = sample_spotcheck(
+        judge_rows,
+        pair_specs,
+        n=n,
+        seed=seed,
+        out_path=out,
+        decisive_only=decisive_only,
+        stratify=tuple(stratify or ()),
+    )
     console.print(
         f"wrote [bold]{path}[/bold] — fill each `your_verdict:` blind, then re-run "
         "with --score <file>"

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import random
+import re
 import threading
 import time
 import uuid
@@ -622,6 +624,69 @@ def run_judge_pass(
 
 # --- human spot-check ---------------------------------------------------------------
 
+#: Default guaranteed pairs per requested stratum in a stratified spot-check sample.
+DEFAULT_SPOTCHECK_MIN_PER_STRATUM = 3
+
+PairKey = tuple[str, int, str, str]
+
+
+def _consensus_by_pair(judge_rows: Sequence[JudgeRow]) -> dict[PairKey, str | None]:
+    """Strict cross-judge consensus per REAL pair.
+
+    Each judge's two order verdicts are order-debiased (:func:`debias`: an
+    order-flip disagreement collapses to ``tie``); the pair's consensus is that
+    shared verdict only when every judge is present and agrees, otherwise ``tie``.
+    ``None`` marks a pair with no usable verdict from any judge.
+    """
+    per_judge: dict[tuple[str, int, str, str, str], dict[str, PairVerdict | None]] = {}
+    for r in judge_rows:
+        if r.control != REAL_PAIR:
+            continue
+        k = (r.task_id, r.epoch, r.config_a, r.config_b, r.judge_id)
+        stored = cast("PairVerdict | None", r.verdict if r.status == "ok" else None)
+        per_judge.setdefault(k, {})[r.order] = stored
+    judge_ids = sorted({k[4] for k in per_judge})
+    consensus: dict[PairKey, str | None] = {}
+    for key in {k[:4] for k in per_judge}:
+        debiased = [
+            debias(
+                per_judge.get((*key, j), {}).get("ab"),
+                per_judge.get((*key, j), {}).get("ba"),
+            )
+            for j in judge_ids
+        ]
+        present = [d for d in debiased if d is not None]
+        if not present:
+            consensus[key] = None
+        elif all(d == present[0] for d in present) and len(present) == len(judge_ids):
+            consensus[key] = present[0]
+        else:
+            consensus[key] = "tie"
+    return consensus
+
+
+def _stratified_pick(
+    eligible: Sequence[PairKey],
+    n: int,
+    strata: Sequence[str],
+    rng: random.Random,
+    min_per_stratum: int,
+) -> list[PairKey]:
+    """Up to ``min_per_stratum`` picks per requested contestant config, rest random."""
+    picks: list[PairKey] = []
+    used: set[PairKey] = set()
+    for stratum in strata:
+        pool = [k for k in eligible if stratum in (k[2], k[3]) and k not in used]
+        rng.shuffle(pool)
+        for k in pool[:min_per_stratum]:
+            picks.append(k)
+            used.add(k)
+    rest = [k for k in eligible if k not in used]
+    rng.shuffle(rest)
+    picks.extend(rest[: max(0, n - len(picks))])
+    rng.shuffle(picks)
+    return picks[:n]
+
 
 def sample_spotcheck(
     judge_rows: Sequence[JudgeRow],
@@ -630,16 +695,25 @@ def sample_spotcheck(
     n: int = 10,
     seed: int = 42,
     out_path: Path | str,
+    decisive_only: bool = True,
+    stratify: Sequence[str] = (),
+    min_per_stratum: int = DEFAULT_SPOTCHECK_MIN_PER_STRATUM,
 ) -> Path:
     """Write a blinded spot-check file of ``n`` seeded-random REAL judged pairs.
 
-    Presentation order is re-randomized per pair; the permutation is recorded in
-    an HTML comment header so :func:`score_spotcheck` can map the human verdicts
-    back to the canonical frame without the human ever seeing config names.
+    ``decisive_only`` (default) restricts the sample to pairs whose cross-judge
+    consensus is decisive (``a``/``b``): the gate scores agreement tie-excluded
+    (Zheng et al. 2023's without-tie convention), so a consensus ``tie`` — often a
+    mere cross-judge disagreement, not a property of the outputs — is nothing a
+    human can meaningfully match. ``stratify`` names contestant configs to
+    guarantee ``min_per_stratum`` pairs each (e.g. the headline contrasts), so the
+    sample is not dominated by a contrast that does not headline. Presentation
+    order is re-randomized per pair and recorded in an HTML comment so
+    :func:`score_spotcheck` can map verdicts back to the canonical frame without
+    the human ever seeing config names.
     """
-    import random
-
     real = {(p.task_id, p.epoch, p.config_a, p.config_b): p for p in pairs}
+    consensus = _consensus_by_pair(judge_rows)
     judged = sorted(
         {
             (r.task_id, r.epoch, r.config_a, r.config_b)
@@ -648,10 +722,16 @@ def sample_spotcheck(
         }
     )
     eligible = [k for k in judged if k in real]
+    if decisive_only:
+        eligible = [k for k in eligible if consensus.get(k) in ("a", "b")]
     if not eligible:
-        raise ValueError("no judged real pairs available to spot-check")
+        raise ValueError(
+            "no decisive judged real pairs available to spot-check"
+            if decisive_only
+            else "no judged real pairs available to spot-check"
+        )
     rng = random.Random(seed)
-    picks = rng.sample(eligible, min(n, len(eligible)))
+    picks = _stratified_pick(eligible, n, stratify, rng, min_per_stratum)
     lines = [
         "# Judge spot-check — blinded",
         "",
@@ -691,66 +771,51 @@ def sample_spotcheck(
 
 @dataclass(frozen=True, slots=True)
 class SpotcheckReport:
+    """Human↔judge agreement: gated tie-excluded, with the strict view as context.
+
+    ``n_scored``/``n_agree`` (and :attr:`agreement`) are the GATE — agreement on
+    decisive-consensus pairs only, the without-tie convention whose ~80% bar the
+    gate echoes (Zheng et al. 2023, MT-Bench/Chatbot Arena Tables 5–6). The strict
+    fields report the exact 3-way agreement over every answered pair (ties
+    included), reported for honesty, never gated on.
+    """
+
     n_scored: int
     n_agree: int
+    n_strict_scored: int = 0
+    n_strict_agree: int = 0
+    n_human_tie_on_decisive: int = 0
 
     @property
     def agreement(self) -> float | None:
         return self.n_agree / self.n_scored if self.n_scored else None
 
+    @property
+    def strict_agreement(self) -> float | None:
+        return self.n_strict_agree / self.n_strict_scored if self.n_strict_scored else None
+
 
 def score_spotcheck(path: Path | str, judge_rows: Sequence[JudgeRow]) -> SpotcheckReport:
-    """Agreement between the human's blinded verdicts and the per-pair judge verdicts.
+    """Agreement between the human's blinded verdicts and the cross-judge consensus.
 
-    The judge side is the cross-judge consensus verdict (both judges' debiased
-    verdicts must agree, else ``tie`` — the strict headline view). Human ``A``/``B``
-    map through the recorded permutation back to the canonical frame.
+    Two metrics over the same filled file: the GATE (decisive-consensus pairs
+    only — a human ``tie`` on a decisive pair is a miss, per the without-tie
+    convention) and, for context, the strict 3-way agreement over all answered
+    pairs. Human ``A``/``B`` map through the recorded permutation back to the
+    canonical frame.
     """
-    import re
-
     text = Path(path).read_text(encoding="utf-8")
     headers = re.findall(r"<!-- pair:(\d+) key:([^ ]+) order:(ab|ba) -->", text)
     answers = re.findall(r"your_verdict:\s*([ABab]|tie|Tie|TIE)?\s*(?:<!--|$)", text, re.MULTILINE)
-    by_pair: dict[tuple[str, int, str, str], tuple[str | None, ...]] = {}
-    for r in judge_rows:
-        if r.control != REAL_PAIR:
-            continue
-        key = (r.task_id, r.epoch, r.config_a, r.config_b)
-        by_pair.setdefault(key, ())
-    # Consensus per pair: debias per judge, then strict agreement across judges.
-    per_judge: dict[tuple[str, int, str, str, str], dict[str, PairVerdict | None]] = {}
-    for r in judge_rows:
-        if r.control != REAL_PAIR:
-            continue
-        k = (r.task_id, r.epoch, r.config_a, r.config_b, r.judge_id)
-        stored = cast("PairVerdict | None", r.verdict if r.status == "ok" else None)
-        per_judge.setdefault(k, {})[r.order] = stored
-    consensus: dict[tuple[str, int, str, str], str | None] = {}
-    judge_ids = sorted({k[4] for k in per_judge})
-    for key in by_pair:
-        debiased = [
-            debias(
-                per_judge.get((*key, j), {}).get("ab"),
-                per_judge.get((*key, j), {}).get("ba"),
-            )
-            for j in judge_ids
-        ]
-        present = [d for d in debiased if d is not None]
-        if not present:
-            consensus[key] = None
-        elif all(d == present[0] for d in present) and len(present) == len(judge_ids):
-            consensus[key] = present[0]
-        else:
-            consensus[key] = "tie"
+    consensus = _consensus_by_pair(judge_rows)
 
-    n_scored = 0
-    n_agree = 0
+    n_scored = n_agree = 0
+    n_strict_scored = n_strict_agree = n_human_tie_on_decisive = 0
     for (num, raw_key, order), answer in zip(headers, answers, strict=False):
         if not answer:
             continue
         task_id, epoch_s, config_a, config_b = raw_key.split("|")
-        key = (task_id, int(epoch_s), config_a, config_b)
-        judge_verdict = consensus.get(key)
+        judge_verdict = consensus.get((task_id, int(epoch_s), config_a, config_b))
         if judge_verdict is None:
             continue
         human = answer.strip().lower()
@@ -761,11 +826,23 @@ def score_spotcheck(path: Path | str, judge_rows: Sequence[JudgeRow]) -> Spotche
                 cast("RawVerdict", human.upper()), cast('Literal["ab", "ba"]', order)
             )
         )
-        n_scored += 1
+        n_strict_scored += 1
         if human_canonical == judge_verdict:
-            n_agree += 1
-        else:
-            logger.info(
-                "spot-check pair %s: human=%s judge=%s", num, human_canonical, judge_verdict
-            )
-    return SpotcheckReport(n_scored=n_scored, n_agree=n_agree)
+            n_strict_agree += 1
+        if judge_verdict in ("a", "b"):  # the gate: decisive consensus only
+            n_scored += 1
+            if human_canonical == judge_verdict:
+                n_agree += 1
+            else:
+                if human_canonical == "tie":
+                    n_human_tie_on_decisive += 1
+                logger.info(
+                    "spot-check pair %s: human=%s judge=%s", num, human_canonical, judge_verdict
+                )
+    return SpotcheckReport(
+        n_scored=n_scored,
+        n_agree=n_agree,
+        n_strict_scored=n_strict_scored,
+        n_strict_agree=n_strict_agree,
+        n_human_tie_on_decisive=n_human_tie_on_decisive,
+    )

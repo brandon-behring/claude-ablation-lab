@@ -65,7 +65,8 @@ external CLI calls; `Grader.grade(output, gold)` structurally cannot express it)
 version; `--controls-only` runs/scores the gate. The gate is a **coarse
 preflight** — the standing defenses are the length-ratio column on every
 verdict, the order-disagreement rate, and the human spot-check (≥ 80 % blind
-agreement to headline).
+agreement to headline — scored **tie-excluded** on decisive-consensus pairs, the
+Zheng et al. 2023 without-tie convention).
 
 ## Privacy
 
@@ -121,8 +122,14 @@ Findings, scoped as **preference, not correctness**:
    at 1.30× cost. The opus reflex remains unearned on every instrument the lab
    has.
 
-Gate on headline use: `results/judge_spotcheck.md` (10 blinded pairs) awaits the
-author's verdicts; ≥ 80 % agreement (`ablation judge-spotcheck --score`) is
-required before these verdicts headline. Judge-side measurement cost: 307 ledger
-rows (64 control + 240 real settled calls + 3 retried transient failures, all
-recovered), mean 24 s/call, $0 marginal (subscription CLIs).
+Gate on headline use: `results/judge_spotcheck.md` (10 blinded pairs, sampled
+**decisive-consensus-only** and stratified to the headline Fable contrasts) awaits
+the author's verdicts; ≥ 80 % agreement — scored **tie-excluded** on decisive pairs
+(the Zheng et al. 2023 without-tie convention: a consensus tie, often mere
+cross-judge disagreement, is nothing a human can match) via
+`ablation judge-spotcheck --score` — is required before these verdicts headline.
+The bar's calibration at n = 10 (exact binomial: an 85 %-agreement human passes
+≥ 8/10 with P ≈ 0.82; the old ties-included sample made even a 95 % human fail more
+often than not) is recorded in the 2026-07 literature gap-analysis. Judge-side
+measurement cost: 307 ledger rows (64 control + 240 real settled calls + 3 retried
+transient failures, all recovered), mean 24 s/call, $0 marginal (subscription CLIs).
