@@ -1,0 +1,115 @@
+# Literature gap analysis — the lab's measurement instruments (2026-07-07)
+
+> Companion to `2026-07-06_independent-audit.md`. That audit grounded the lab's **economics** (cost/Pareto conventions) in the literature. This one grounds the **measurement instruments** — the LLM-judge phase and the small-n statistics — which until now cited zero papers. Method: three strict-live, excerpt-anchored research dossiers (judge validity, eval statistics, eval-tooling landscape) built over the four gap areas, plus exact numeric calibration of every house constant. Every verdict carries a *best-opposing* finding, sought deliberately, not only confirmation.
+>
+> **Verification state (honest):** the three dossiers pass mechanical citation-audit (judge 39/39, tooling 20/20 verbatim-anchored) and `cross_stage --strict`; every excerpt byte-verifies against a cached source. The adversarial `/dossier-audit` round (independent re-verification) has since run clean — **0 drops / 0 corrections / 0 flags**, including a fabrication check that cleared five 2026-dated preprints via neutral no-title re-fetch — so the sharpest verdicts are now independently audited, not merely mechanically citation-checked.
+
+## TL;DR
+
+The lab's instruments are, on the whole, **well-aligned with the published state of research.** The exact sign-flip test, the epoch-range honesty, the length controls, the controls-gate concept, the cross-vendor self-preference mitigation, the rubric/checklist grader, and the "preference ≠ correctness" caveat all have direct antecedents in the literature. The real gaps cluster in **three places**:
+
+1. **Statistical power (the consequential one).** ~10-prompt grids are badly under-powered; the lab's null results — above all *"no opus edge on checkable probes"* — should be read as **"no *detectable* difference at this power,"** not "no difference."
+2. **Two judge-aggregation choices.** The equal-weight cross-judge mean is *contradicted* by reliability-weighted aggregation; the tie-on-cross-vendor-disagreement rule has *no published precedent* (a defensible house convention, but label it one).
+3. **A contamination blind spot.** The lab never screens its public-source probes (t8 math, t1 parquet) for train-test contamination; clustered top scores could be memorization, not a real capability ceiling.
+
+One instrument defect — the human spot-check gate — was found *and fixed* during this audit (see §4). Nothing here overturns the lab's economics conclusions.
+
+---
+
+## 1. Context & method
+
+The 2026-07-06 audit noted every committed result saturates at the top and no checkable task separates sonnet from opus; the LLM-judge phase (the lab's first REAL positive separation: fable > sonnet on t9 authoring) is its newest instrument and cited no literature. This audit maps ~18 load-bearing house choices to the literature with an **aligned / contradicted / no-guidance** verdict each, shows the arithmetic for every numeric gate, and proposes issues for what is actually broken.
+
+Sources live in three strict-live research dossiers maintained locally — `research_llm_judge_validity`, `research_eval_statistics`, `research_eval_tooling_landscape` (24 + 24 + 11 primary sources) — plus a refreshed `research_eval_drift`. Citations in this doc are self-contained (this repo is public; the dossiers are local).
+
+---
+
+## 2. Verdict matrix
+
+Legend: **A** aligned · **C** contradicted · **NG** no-guidance · **✔fixed**. Each row: what the literature says → verdict → the strongest opposing finding → recommendation.
+
+### Judge protocol
+
+| # | House choice | Literature | Verdict | Best opposing | Rec |
+|---|---|---|---|---|---|
+| J1 | pairwise A/B/tie; order-flip → recorded tie | Position inconsistency is systematic and concentrated on *small quality gaps* (Shi 2024), so tie-on-flip targets genuinely near-equal pairs | **A** (tie rule) / **C** (pairwise vs pointwise) | Pairwise is ~4× more manipulable by surface features than pointwise (Liu 2024, ~35% vs 9% flip); PORTIA *recovers* verdicts instead of discarding (Li 2023) | Keep tie-on-flip; note the pairwise↔robustness tradeoff; PORTIA-style recovery as a future upgrade (P2) |
+| J2 | anti-length prompt clause + ~2× padding control + length-matched positive control | Swap-and-aggregate measurably improves alignment (Wang 2023); length-matched positive control is a validated diagnostic (Soumik 2026) | **A** (controls) / **C** (prompt clause) | The field's length-bias fix is a *structural* control (regression / length-matching, Dubois 2024), not a prompt instruction; verbosity-bias direction is judge-family-dependent (Soumik 2026) | Rely on the padding control + length-ratio column; demote the prompt clause (P3) |
+| J3 | cross-vendor codex+gemini panel vs self-preference; pinned efforts | Self-preference is linearly driven by self-*recognition* (Panickssery 2024) → a different-family judge removes the mechanism; a diverse panel de-correlates errors (Kohli 2026) | **A** (as self-pref/de-correlation mitigation) | Self-preference may be *familiarity/perplexity*-driven, not authorship (Wataoka 2024) → cross-vendor doesn't fully fix it; a panel ≈ best single judge, not more accurate (Kohli 2026) | Keep cross-vendor; state the familiarity residue + that the panel buys de-correlation not accuracy (P3) |
+| J4 | cross-judge ±1/0 mean; tie+win→±0.5; disagreement → tie | Reliability-weighted Bradley-Terry aggregation **beats a plain average** for pairwise juries (Qian 2026) | **C** (aggregation) / **NG** (tie rule) | With only 2 judges, reliability-weighting needs estimates the lab lacks; equal-weight is a defensible n=2 default. No paper forces a tie on cross-vendor disagreement (closest: same-judge swap→tie, Wang 2023 PandaLM) | Adopt reliability-weighting if a 3rd judge/calibration appears, else justify equal-weight-at-n=2; label tie-on-disagreement a house convention (P2) |
+| J5 | controls-gate admission thresholds (same-output null / verbosity / positive) | Adversarial judge validation (Zeng 2024 LLMBar) + separability-via-non-overlapping-CIs as a benchmark-quality standard (Li 2024 Arena-Hard) are published antecedents | **A** (novel-but-principled) | LLMBar's 419 adversarial pairs vs the lab's handful → the controls may under-test | Cite LLMBar/Arena-Hard; consider widening the adversarial control set (P3). Gate arithmetic: §3 |
+| J6 | human spot-check ≥80% of 10 blinded pairs | Zheng 2023's 80% is **without ties** (85%/81% GPT-4↔human / human↔human; 66%/63% with ties) | **✔fixed** (was contradicted-in-implementation) | — | **Done** in this audit (§4): tie-excluded scoring + decisive-stratified sample |
+| J7 | "preference is not correctness" + construct validity | A single preference score under-represents factuality (Hosking 2023) and rates fluent-but-wrong above short-but-right (Wu 2023) | **A** — with a validating nuance | LLM preference *does* track expert quality on story/writing generation (Chiang 2023) → for t9 authoring, don't over-read "measures nothing" | Keep the caveat; soften for t9 (preference ≈ expert-quality on style-rich authoring, ≠ factual correctness) (P2) |
+| T2 | 15-item checklist grader (9 discriminating + 6 gate, partial credit, anti-gaming floors) | Decomposing an instruction into YES/NO items raises human agreement 46.4→52.2% over holistic (Cook 2024 TICK); rubric+reference reliable (Kim 2023 Prometheus 0.897 Pearson) | **A** on the decomposition principle | Checklists still reach only ~52% absolute agreement; explicit-criteria judges can *bake in* style criteria (Wang 2023 PandaLM) — the style-over-substance surface t9 must avoid | Cite TICK/Prometheus; keep anti-gaming floors as a labeled house extension (P3) |
+
+### Statistics
+
+| # | House choice | Literature | Verdict | Best opposing | Rec |
+|---|---|---|---|---|---|
+| S1 | exact sign-flip permutation on per-prompt paired scores; MIN_PAIRS_FOR_REAL=6 | Independence-assuming tests *underestimate* significance for correlated systems → use randomization tests (Yeh 2000); sign/permutation is the canonical default for paired shared-item comparisons (Dror 2018) | **A** (with power caveat) | Non-parametric tests are less powerful (a real cost at n=6); the canon is silent on discarding tied pairs; Søgaard 2014 estimates a ~0.0025 cutoff needed under perfect metrics | Cite the canon; note zero-diff exclusion is a house convention (P3). n=6 floor confirmed exact (§3) |
+| S2 | predeclared primary exempt from correction + Holm on exploratory | Holm 1979 is the exact step-down; Friedman + post-hoc is the closest grid analog (Demšar 2006) — but both correct **all** comparisons | **A** (Holm) / **NG** (primary-exempt) | Demšar/Holm give no basis for a correction-exempt primary (a clinical-trial gatekeeping import); Benavoli 2017 would abandon NHST+Holm for Bayesian analysis | Relabel primary-exempt as a *reporting* convention (uncorrected primary reported alongside the Holm-corrected family), or cite gatekeeping (P2) |
+| S3 | below n=5, "epoch range" not "95% CI"; bootstrap = effect-size context | Percentile-bootstrap coverage is far below nominal at small n, LLM-applied (Anglin 2026); resampling CIs are wide even over 3 annotation sets (Deutsch 2021) | **A** (lab is *stricter* than the field) | Both still *call* these confidence intervals; the lab's refusal is more conservative than the literature | None (aligned); optional df-adjusted corrected interval as a middle path |
+| S4 | `advise` non-inferiority margin 0.02 (deliberately a point estimate) | Declared non-inferiority margins are used in ML classifier eval, *not* clinical-only (Pouget 2025) — settling the open question | **A** (concept) / **C** (point-estimate use) | Pouget enforces the margin with an *uncertainty-aware hypothesis test*, so a bare point-estimate 0.02 ignores decision uncertainty; Card 2020 / Miller 2024: ~10-prompt grids are far under-powered | **P1**: reframe 0.02 as a screen; gate on effect-size CI vs margin when it matters; caveat every null as power-bounded |
+| S5 | prompts × epochs × orders × judges not independent; prompt is the unit | Prompt-as-unit is right (Miller super-population; Hong 2026 cluster-robust paired SE) | **A** (unit) / **incomplete** (model) | The epochs→prompt collapse ignores *order* and *judge* variance; ignoring clustering underestimates variance (Hong 2026); randomize rather than fix order/judge (Bouthillier 2021) | Carry an order/judge variance note or cluster-robust SE (P2) |
+| T1 | ceiling/saturation; discrimination design is trial-and-error | Item-discrimination / IRT is the principled alternative: ~100 IRT-selected items reproduce full MMLU (Polo 2024); PSN-IRT diagnoses "poor separability among top models" — the exact symptom (Zhou 2025); saturation is measurable across 3765 benchmarks (Ott 2022) | **C** — a method exists — with transplant caveats | Every IRT result is on multiple-choice/knowledge tasks, not agentic/free-form (t7/t8); IRT needs a large model×item matrix the 3–4-model grid lacks; local-independence/unidimensionality plausibly violated; saturation may be intrinsic (author harder items) | Adopt the *concept* (discrimination index / difficulty-targeting) when authoring probes; frame saturation as measurable (P2) |
+
+### Contamination & novelty
+
+| # | House choice | Literature | Verdict | Best opposing | Rec |
+|---|---|---|---|---|---|
+| C1 | public-source prompts (t8 math, t1 parquet) never contamination-checked | Static public benchmarks lose validity to contamination and should be refreshed (White 2024 LiveBench); measured contamination is large (MMLU 13.8%, +0.03–0.054 accuracy) and "alarmingly easy" to hide (M 2026; Wang 2025) | **gap** | The lab's probes are small/authored enough that memorization impact may be negligible; contamination mainly bites large public suites | Add a per-task contamination note; Min-K%/n-gram spot check or fresh-authored variant before any t8 headline (P2). *C1↔T1: rule out memorization before reading clustered scores as a ceiling* |
+| C2 | operational leakage (t6 answer-key-in-repo sandbox-gating; shuffle self-test rescoped to a metric-pipeline test) | Repo-hygiene concern, not benchmark contamination; the lab's self-scoping is honest | **A** (likely) | — | None; keep the honest scope note |
+| N1 | where the lab sits; is cheaper-beats-expensive-selection novel? | Closest peer HAL (Kapoor 2025) ranks many agents on *public* benchmarks under *metered* cost; the lab ablates *one* agent's config defaults on *private* tasks over a *flat-rate* CLI. Routing (Chen 2023 FrugalGPT, Ong 2024 RouteLLM) optimizes *per-query* under metered cost — the mirror image | **novel composite; one sub-claim not novel** | The "novel composite" is a combination of known parts — reviewers may read it as engineering integration, not a research result | Frame the effort finding as *corroboration* (HAL et al.), the leakage-gated flat-rate ablation harness as the contribution (P2/P3) |
+
+**On N1's non-novel half:** "higher effort ≠ better, sometimes worse" is multiply-published (HAL; the overthinking inverted-U; ≥2 others). The lab must *cite*, not claim it. The un-found-published composite is: *no expensive-model edge across model AND effort jointly, on checkable tasks, via a leakage-gated cost/latency/token-frontier ablation over a subscription CLI.* Community bug reports that `reasoning_effort` is a silent no-op on Fable 5 independently corroborate the lab's "acceptance ≠ application" clamp finding.
+
+---
+
+## 3. Numeric gate calibration (the arithmetic, not just citations)
+
+Computed with the lab's own `analyze._sign_flip_p`; reproduces the pilot exactly.
+
+**Sign-flip validated against the live judge ledger:** fable/high 9/1/0 → p=0.0039; fable/low 9/0/1 → p=0.0039 (Holm→0.0078); opus/high 5/3/2 → p=0.4219. All match the pilot.
+
+**S1 — the MIN_PAIRS_FOR_REAL=6 floor is exactly right.** Min two-sided p = 2/2ⁿ, so `real` (p≤0.05) is *unreachable* at n≤5 (n=5 → 0.0625); n=6 needs a perfect 6/6 sweep (p=0.031); n=10 needs ≥9/10 same-sign (p=0.021).
+
+**S4/power — the load-bearing caveat.** The n=10 sign test's power P(detect at α=.05) vs true per-prompt win-rate q: q=.60 → **0.05** (≈ none), .70 → 0.15, .80 → **0.38**, .90 → 0.74, .95 → 0.91. The instrument is decisive only for *large* preferences (Fable was 9–10/10); a genuine 70–80% edge is routinely missed. **"No opus edge" at this n is "not detected," not "absent."**
+
+**J5 — controls-gate binomials.** Verbosity (padded wins ≤1/6): a length-biased judge (true padded-win-rate 0.7) fails with P≈0.99; a neutral judge (0.2) passes ≈0.66 — **well-separated, the control works.** Same-output null (≥7/8 ties): needs a true tie-rate ≥0.9 to pass reliably (P=0.81), so a merely-noisy unbiased judge (0.8) false-fails ~half the time — strict, slightly harsh. Positive control (good ≥5/6): needs detection ≥0.9 (P=0.89).
+
+---
+
+## 4. The spot-check gate fix (found and fixed in this audit)
+
+The ≥80%-of-10 human spot-check echoed Zheng 2023's "over 80% agreement," but that number is measured **without ties** (MT-Bench 85% GPT-4↔human / 81% human↔human; *with* ties only 66%/63%). The lab's `score_spotcheck` required an exact 3-way match (with-tie), and the strict cross-judge consensus manufactured ties (10 of 15 sampled ties were forced cross-judge disagreements; the old uniform sampler drew 4 into the 10). Exact convolution: a 95%-agreement reader passed ≥8/10 only ~28% of the time; an 85%-agreement (Zheng-grade) reader ~2%.
+
+**Fixed** (on the PR #18 branch, user-approved gate exception): scoring is now **tie-excluded on decisive-consensus pairs** (the gate), with the strict 3-way agreement + a "human tie on decisive pair" count reported as context; the sampler is **decisive-only and stratified** to the headline Fable contrasts (regenerated file: 10 decisive pairs — 5 fable/high, 4 fable/low, 1 opus, zero ties). Post-fix an 85%-agreement reader passes ≥8/10 with P≈0.82. Bar level (80%), blinding, and permutation unchanged. Verified end-to-end through the CLI. `judge_orchestrate.py`, `cli/main.py`, tests, and the design-doc note carry the change; 502 unit+golden tests pass.
+
+---
+
+## 5. Recommendations
+
+**P1 — fix:**
+1. **Report nulls as power-bounded (S4).** Every "no edge" (esp. "no opus edge on checkable probes") → "no *detectable* difference at this power." Reframe `advise`'s 0.02 as a point-estimate screen and, when a decision hinges on it, gate on whether the effect-size CI clears the margin. Most consequential — it touches the lab's central claim.
+2. **Spot-check gate (J6) — done** (§4).
+
+**P2 — real gap:** 3. Judge aggregation (J4): reliability-weighting vs equal-weight mean; label tie-on-disagreement a house convention. 4. Contamination screening (C1) for t8/t1. 5. Discrimination-index/difficulty-targeting in task design (T1). 6. Order/judge clustering in uncertainty (S5). 7. Construct-validity nuance (J7) + METHODOLOGY related-work paragraph (N1).
+
+**P3 — citations/minor:** S1 cite Yeh/Dror + note zero-diff exclusion; S2 relabel primary-exempt; J1 pairwise-robustness note; J2 demote prompt clause; J3 familiarity residue; J5 cite LLMBar/Arena-Hard; T2 cite TICK/Prometheus.
+
+## 6. Audit backlog (no-guidance / house-convention — recorded, not filed)
+
+Zero-diff pair exclusion (S1); tie-on-cross-vendor-disagreement (J4); predeclared-primary-exempt (S2); pinned judge efforts (J3); anti-gaming floors + 9/6 checklist split (T2); the specific 0.02 margin value (S4). Defensible; flagged so they aren't mistaken for grounded.
+
+## 7. Issue-filing plan (after review — the blocking checkpoint)
+
+`tracked` + priority, per CONTRIBUTING. **eval-toolkit implications (e.g. a clustered-SE in the bootstrap for S5) go upstream as `consumer:claude-ablation-lab` issues, never local patches.** Candidates: P1 nulls/advise (analyze.py); P2 judge aggregation (judge_analyze.py), contamination screening (task docs), discrimination-by-design (docs), order/judge clustering (upstream if eval-toolkit); METHODOLOGY related-work (docs, done here not an issue). Speculative §6 items are not filed.
+
+---
+
+## 8. References (self-contained)
+
+**Judge validity.** Zheng et al. 2023, *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena*, NeurIPS 2023, arXiv:2306.05685 · Liu et al. 2024, *Aligning with Human Judgement: The Role of Pairwise Preference in LLM Evaluators*, COLM 2024, arXiv:2403.16950 · Shi et al. 2024, *Judging the Judges: A Systematic Study of Position Bias in LLM-as-a-Judge*, arXiv:2406.07791 · Li et al. 2023, *Split and Merge: Aligning Position Biases in LLM-based Evaluators (PORTIA)*, EMNLP 2024, arXiv:2310.01432 · Wang et al. 2023, *Large Language Models are not Fair Evaluators*, arXiv:2305.17926 · Dubois et al. 2024, *Length-Controlled AlpacaEval*, arXiv:2404.04475 · Panickssery et al. 2024, *LLM Evaluators Recognize and Favor Their Own Generations*, arXiv:2404.13076 · Wataoka et al. 2024, *Self-Preference Bias in LLM-as-a-Judge*, arXiv:2410.21819 · Soumik 2026, *Judging the Judges: … Bias Mitigation Strategies in LLM-as-a-Judge Pipelines*, arXiv:2604.23178 · Zeng et al. 2024, *Evaluating LLMs at Evaluating Instruction Following (LLMBar)*, ICLR 2024, arXiv:2310.07641 · Bai et al. 2024, *MT-Bench-101*, ACL 2024, arXiv:2402.14762 · Li et al. 2024, *From Crowdsourced Data to High-Quality Benchmarks (Arena-Hard)*, arXiv:2406.11939 · Kohli 2026, *Nine Judges, Two Effective Votes: Correlated Errors Undermine LLM Evaluation Panels*, arXiv:2605.29800 · Qian et al. 2026, *Who can we trust? LLM-as-a-jury for Comparative Assessment*, arXiv:2602.16610 · Hosking et al. 2024, *Human Feedback is not Gold Standard*, ICLR 2024, arXiv:2309.16349 · Wu & Aji 2023, *Style Over Substance: Evaluation Biases for LLMs*, arXiv:2307.03025 · Chiang & Lee 2023, *Can LLMs Be an Alternative to Human Evaluations?*, ACL 2023, arXiv:2305.01937 · Kim et al. 2024, *Prometheus 2*, arXiv:2405.01535 · Kim et al. 2023, *Prometheus*, ICLR 2024, arXiv:2310.08491 · Cook et al. 2024, *TICKing All the Boxes: Generated Checklists Improve LLM Evaluation and Generation*, arXiv:2410.03608 · Zhu et al. 2023, *JudgeLM*, arXiv:2310.17631 · Wang et al. 2023, *PandaLM*, ICLR 2024, arXiv:2306.05087.
+
+**Statistics.** Yeh 2000, *More accurate tests for the statistical significance of result differences*, COLING 2000 · Koehn 2004, *Statistical Significance Tests for MT Evaluation*, EMNLP 2004 · Berg-Kirkpatrick et al. 2012, *An Empirical Investigation of Statistical Significance in NLP*, EMNLP-CoNLL 2012 · Dror et al. 2018, *The Hitchhiker's Guide to Testing Statistical Significance in NLP*, ACL 2018 · Søgaard et al. 2014, *What's in a p-value in NLP?*, CoNLL 2014 · Riezler & Maxwell 2005, *On Some Pitfalls in Automatic Evaluation and Significance Testing for MT*, ACL 2005 WS · Holm 1979, *A Simple Sequentially Rejective Multiple Test Procedure*, Scand. J. Statist. 6(2) · Demšar 2006, *Statistical Comparisons of Classifiers over Multiple Data Sets*, JMLR · Benavoli et al. 2017, *Time for a Change: … Bayesian Analysis*, JMLR · Miller 2024, *Adding Error Bars to Evals*, arXiv:2411.00640 · Deutsch et al. 2021, *A Statistical Analysis of Summarization Evaluation Metrics Using Resampling*, TACL · Card et al. 2020, *With Little Power Comes Great Responsibility*, EMNLP 2020 · Bouthillier et al. 2021, *Accounting for Variance in ML Benchmarks*, MLSys 2021, arXiv:2103.03098 · Gorman & Bedrick 2019, *We Need to Talk about Standard Splits*, ACL 2019 · Pouget et al. 2025, *Suitability Filter*, arXiv:2505.22356 · Hong et al. 2026, *Beyond Point Estimates: … Metrics under Clustered Data*, arXiv:2606.03656 · Anglin 2026, *Estimating Uncertainty in Classifier Performance … Nested Data*, arXiv:2606.26422 · Polo et al. 2024, *tinyBenchmarks*, arXiv:2402.14992 · Rodriguez et al. 2021, *Evaluation Examples are not Equally Informative*, ACL-IJCNLP 2021 · Lalor et al. 2016, *Building an Evaluation Scale using Item Response Theory*, EMNLP 2016 · Hofmann et al. 2025, *Fluid Language Model Benchmarking*, arXiv:2509.11106 · Zhou et al. 2025, *Lost in Benchmarks? … Item Response Theory*, arXiv:2505.15055 · Perlitz et al. 2023, *Efficient Benchmarking of Language Models*, arXiv:2308.11696 · Ott et al. 2022, *Mapping global dynamics of benchmark creation and saturation in AI*, Nature Communications, arXiv:2203.04592.
+
+**Tooling / novelty.** Kapoor et al. 2025, *Holistic Agent Leaderboard*, arXiv:2510.11977 · Chen, Zaharia & Zou 2023, *FrugalGPT*, arXiv:2305.05176 · Ong et al. 2024, *RouteLLM*, ICLR 2025, arXiv:2406.18665 · Gao et al. 2024, *The Language Model Evaluation Harness*, EleutherAI · Aider LLM Leaderboards (aider.chat/docs/leaderboards) · Artificial Analysis, *Benchmarking Methodology* · Inspect (UK AISI), *Using Models* · OpenAI Evals · Promptfoo docs · Braintrust docs · Anthropic, *Effort* (platform.claude.com). **Contamination (via research_eval_drift):** White et al. 2024, *LiveBench* · plus contamination-measurement and static→dynamic-shift sources.
