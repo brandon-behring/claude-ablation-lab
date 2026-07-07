@@ -2,7 +2,7 @@
 
 > Companion to `2026-07-06_independent-audit.md`. That audit grounded the lab's **economics** (cost/Pareto conventions) in the literature. This one grounds the **measurement instruments** — the LLM-judge phase and the small-n statistics — which until now cited zero papers. Method: three strict-live, excerpt-anchored research dossiers (judge validity, eval statistics, eval-tooling landscape) built over the four gap areas, plus exact numeric calibration of every house constant. Every verdict carries a *best-opposing* finding, sought deliberately, not only confirmation.
 >
-> **Verification state (honest):** the three dossiers pass mechanical citation-audit (judge 39/39, tooling 20/20 verbatim-anchored) and `cross_stage --strict`; every excerpt byte-verifies against a cached source. The adversarial `/dossier-audit` round (independent re-verification) is the remaining quality gate and has **not** yet run — treat the sharpest verdicts as high-confidence-but-unaudited until it does.
+> **Verification state (honest):** the three dossiers pass mechanical citation-audit (judge 39/39, tooling 20/20 verbatim-anchored) and `cross_stage --strict`; every excerpt byte-verifies against a cached source. The adversarial `/dossier-audit` round (independent re-verification) has since run clean — **0 drops / 0 corrections / 0 flags**, including a fabrication check that cleared five 2026-dated preprints via neutral no-title re-fetch — so the sharpest verdicts are now independently audited, not merely mechanically citation-checked.
 
 ## TL;DR
 
