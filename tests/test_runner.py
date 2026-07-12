@@ -73,6 +73,34 @@ def test_result_from_rate_limited_payload() -> None:
 
 
 @pytest.mark.unit
+def test_result_from_payload_hardens_nonfinite_numeric_fields() -> None:
+    # B5: a literal NaN cost survives `float(x or 0.0)` and poisons every projection; a
+    # NaN/inf or bad-string num_turns/cost crashes int()/float() on the paid ok path. Both
+    # must coerce to a finite floor (0) — the raw payload is still preserved on res.raw.
+    base = dict(_load("claude_json_success.json"))
+    nan_cost = result_from_payload(
+        {**base, "total_cost_usd": float("nan")}, run_id="r", latency_s=1.0, transcript_path=None
+    )
+    assert nan_cost.status == "ok" and nan_cost.cost_usd == 0.0  # NaN floored, not propagated
+    bad = result_from_payload(
+        {**base, "total_cost_usd": "abc", "num_turns": float("inf")},
+        run_id="r",
+        latency_s=1.0,
+        transcript_path=None,
+    )
+    assert bad.cost_usd == 0.0 and bad.num_turns == 0  # no raise; both floored
+    # A huge JSON integer literal overflows float() (OverflowError, not ValueError) — must
+    # still floor, not crash the paid ok path (adversarial review, finding 4).
+    huge = result_from_payload(
+        {**base, "total_cost_usd": 10**400, "num_turns": 10**400},
+        run_id="r",
+        latency_s=1.0,
+        transcript_path=None,
+    )
+    assert huge.cost_usd == 0.0 and huge.num_turns == 0
+
+
+@pytest.mark.unit
 def test_argv_includes_core_flags_and_optionals() -> None:
     runner = ClaudeCodeRunner(max_budget_usd=1.0, permission_mode="acceptEdits")
     argv = runner._argv("do x", "haiku", "low")
@@ -179,6 +207,25 @@ def test_run_preamble_stdout_ok(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     assert res.transcript_path is not None
     envelope = json.loads(Path(res.transcript_path).read_text())
     assert {"argv", "cwd", "returncode", "stdout", "stderr"} <= envelope.keys()
+
+
+@pytest.mark.unit
+def test_run_ok_survives_transcript_write_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # B3: a paid `ok` run must still yield a RunResult (→ ledger row) when the transcript
+    # sidecar can't be written — else the sweep crashes after paying and re-pays on resume.
+    success = (FIXTURES / "claude_json_success.json").read_text()
+    monkeypatch.setattr(
+        "claude_ablation_lab.runner.subprocess.run", lambda *a, **k: _fake_proc(success)
+    )
+    blocker = tmp_path / "blocker"
+    blocker.write_text("a file, not a dir")  # mkdir under a file → NotADirectoryError (OSError)
+    res = ClaudeCodeRunner(transcript_dir=blocker / "sub").run(
+        "hi", model="haiku", effort="low", cwd=tmp_path
+    )
+    assert res.status == "ok"  # the paid result is preserved
+    assert res.transcript_path is None  # sidecar failed gracefully, not a crash
 
 
 @pytest.mark.unit

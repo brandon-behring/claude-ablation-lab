@@ -7,22 +7,25 @@
 # It also directly tests Anthropic's claim that lower effort on Fable 5 rivals
 # prior models at xhigh, on the cost/latency side.
 #
-# Matrix re-probed live 2026-07-06 on CLI 2.1.201 (20/20 minimal cells `ok`):
-# every model alias below accepts every effort in low|medium|high|xhigh|max, so
-# there is no effort_support restriction. `medium` is dropped for budget (the
-# least informative tier: between two measured ones); `max` is kept on fable only
-# — it is already measured waste at n=5 for haiku/sonnet/opus (pressure test).
+# The CLI *accepts* every alias×effort pair (re-probed live 2026-07-06 on CLI 2.1.201,
+# 20/20 minimal cells `ok`), but acceptance ≠ application. Haiku 4.5 has NO effort
+# parameter (CV2), so its efforts are inert duplicates — the provider capability matrix
+# collapses haiku to ONE canonical cell (pinned to `low` below to make it explicit).
+# `medium` is dropped for budget (least informative tier); `max` is kept on fable only —
+# already measured waste at n=5 for sonnet/opus (pressure test).
 #
-# 3 models × {low, high, xhigh} + fable × {low, high, xhigh, max} = 13 configs
-# × 3 epochs = 39 cells. `ablation estimate` before any run; resumable ledger at
-# results/claude5-refresh.jsonl.
+# sonnet × {low,high,xhigh} + opus × {low,high,xhigh} + fable × {low,high,xhigh,max}
+# + haiku × {low} = 11 configs × 3 epochs = 33 cells. NOTE: the committed 39-row release
+# snapshot (results/claude5-refresh-2026-07-06.jsonl) predates this matrix — its 3
+# haiku-effort rows are one config; it stays valid as a dated release history.
+# `ablation estimate` before any run; resumable ledger at results/claude5-refresh.jsonl.
 models: [haiku, sonnet, opus, claude-fable-5]
 efforts: [low, high, xhigh, max]
 variants: [none]
 epochs: 3
 
 effort_support:
-  haiku: [low, high, xhigh]
+  haiku: [low]
   sonnet: [low, high, xhigh]
   opus: [low, high, xhigh]
   claude-fable-5: [low, high, xhigh, max]

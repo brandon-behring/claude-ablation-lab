@@ -26,8 +26,14 @@ Statistical honesty (the talk's failure-mode #2 and the independent review's
   audit showed a same-sign percentile-bootstrap CI excludes 0 by construction at
   any magnitude (Type-I ≈ 21% at n=4), so it must never be the verdict rule.
 - ``unparseable`` grades count as their honest ``0.0`` in aggregation: the model
-  produced ungradeable output, which is a *quality* failure. Only infra failures
-  (``run_status != 'ok'``) and ``grader_error`` rows are excluded.
+  produced ungradeable output, which is a *quality* failure, surfaced per cell as
+  ``n_unparseable`` (and its rate). Only infra failures (``run_status != 'ok'``) and
+  ``grader_error`` rows are excluded from the mean — but the excluded non-ok runs are
+  now counted per cell as ``n_dropped`` so a systematic failure isn't invisible (B4).
+  **Mind the naming collision:** ``run_status='parse_fail'`` (the *harness* couldn't
+  parse the CLI's JSON envelope — infra-class, excluded, → ``n_dropped``) is a different
+  axis from ``grade_status='unparseable'`` (the *model* produced ungradeable output —
+  a quality failure, included at 0.0, → ``n_unparseable``).
 
 Rows are de-duplicated to the **latest grade per ``run_id``** (so re-grades do not
 double-count) and a cell mixing multiple ``spec_sha`` values is flagged rather
@@ -143,7 +149,14 @@ class ReportCell:
     pareto: bool = False
     leakage: bool = False
     #: unparseable epochs included in the mean at their honest 0.0 (surfaced, not hidden).
+    #: A ``grade_status`` — the model produced ungradeable output (a *quality* failure).
     n_unparseable: int = 0
+    #: non-ok runs for this cell (``run_status`` parse_fail/infra_error/timeout/rate_limited),
+    #: EXCLUDED from the quality mean and otherwise invisible — surfaced so a systematic
+    #: ``parse_fail`` can't hide behind the epochs that *did* parse (B4). Distinct axis from
+    #: ``n_unparseable``: that is a grade_status counted IN the mean; this is a run_status
+    #: kept OUT of it. A cell with **zero** ok runs is absent entirely (warned at report time).
+    n_dropped: int = 0
     #: distinct grader_versions mixed into this cell (⚠ if > 1: metric definitions differ).
     n_grader_versions: int = 1
     # Across-epoch intervals for the cost axes (same estimator and honesty rules as
@@ -166,6 +179,22 @@ class ReportCell:
     #: epochs with measured token counts; < n_epochs means a mixed-era ledger and the
     #: token statistics cover only the measured subset (surfaced, never silent).
     n_token_epochs: int = 0
+    #: Cache-token means over the same measured epochs (input/output/cache tokens entered
+    #: the ledger together on 2026-07-06, so their coverage is exactly ``n_token_epochs``).
+    #: Cache-read from long sessions is the single largest *spend* component (2026-07-03
+    #: audit) yet bills nothing on a flat plan — a throughput/headroom cost, not a dollar one.
+    mean_cache_read_tokens: float | None = None
+    mean_cache_creation_tokens: float | None = None
+    #: TOTAL token throughput = input + output + cache_read + cache_creation: the honest
+    #: "what this run costs your rate-limit headroom" axis (the ``throughput`` frontier),
+    #: with an across-epoch interval over the epochs that carried ALL FOUR components.
+    mean_total_tokens: float | None = None
+    total_tokens_ci_low: float | None = None
+    total_tokens_ci_high: float | None = None
+    #: epochs with a fully-measured total (all four token components present). Its own
+    #: counter (not ``n_token_epochs``, which gates on output only) so a cell missing cache
+    #: on some epochs never reads as fully measured; ``< n_epochs`` ⇒ partial, off the frontier.
+    n_total_token_epochs: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,18 +219,22 @@ class CompareRow:
     p_value: float | None = None
     #: nonzero paired diffs the test ran on (zero diffs carry no directional evidence).
     n_nonzero: int = 0
+    #: ``unparseable`` rows over the *paired* configs (both variants) underlying this delta —
+    #: each scored 0.0 IN the per-config means the test runs on, so read a nonzero count with
+    #: care. Excludes unpaired configs, which feed no diff (adversarial review, finding 5).
+    n_unparseable: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class AdviceRow:
-    """A per-(task, variant) cost-downgrade recommendation.
+    """A per-(task, variant) downgrade recommendation on the selected advice axis.
 
-    The **cheapest** config whose mean quality is within ``margin`` of the **best**
-    config that ran for this (task, variant), reported against the user's *reflex*
-    config (their expensive default) so the saving is "vs what you reach for."
-    Flooring at the best, not the reflex, is deliberate: if the reflex itself
-    under-performs a cheaper config, "cheapest within margin of the reflex" would
-    recommend a **failing** config; flooring at the best never does.
+    The config that **minimises the selected axis** (latency / throughput / cost) while
+    its mean quality is within ``margin`` of the **best** config that ran for this
+    (task, variant), reported against the user's *reflex* config (their expensive default)
+    so the saving is "vs what you reach for." Flooring at the best, not the reflex, is
+    deliberate: if the reflex itself under-performs a cheaper config, "best within margin
+    of the reflex" would recommend a **failing** config; flooring at the best never does.
 
     Why a **margin**, not a significance test: ``cost_advisor`` sees only per-cell
     epoch means (``ReportCell``), and at the few epochs this harness runs a per-cell
@@ -241,13 +274,20 @@ class AdviceRow:
     #: recommended config's epoch count (few epochs → treat as exploratory).
     n_epochs: int
     #: best config scored ≤ margin — nothing meaningfully works, so the row is advisory
-    #: only and is excluded from the headline overpay total.
+    #: only and is excluded from the headline savings total (latency / throughput / $).
     vacuous: bool = False
     #: the reflex or recommended cell carries a ``report`` validity flag (leakage /
     #: mixed spec / mixed grader-version / unparseable epochs) — its number is not clean.
     suspect: bool = False
     #: True if the exact reflex config was absent and a fallback stood in.
     reflex_fallback: bool = False
+    #: reflex/recommended TOTAL token throughput (input+output+cache) and the reflex−rec
+    #: saving — None when the ledger predates token persistence (2026-07-06). Efficiency axis.
+    reflex_total_tokens: float | None = None
+    rec_total_tokens: float | None = None
+    throughput_saving: float | None = None
+    #: which axis drove the recommendation + ordering (latency | throughput | cost).
+    x_axis: str = "latency"
     note: str = ""
 
 
@@ -256,14 +296,16 @@ def _connect() -> duckdb.DuckDBPyConnection:
 
 
 #: valid ``x_axis`` values for the Pareto frontier and how each reads its x off a
-#: cell. ``cost`` is USD (a comparability metric on a subscription), ``latency`` is
-#: wall-clock seconds (the *real* cost of a flat subscription), ``tokens`` is mean
-#: output tokens (None on pre-2026-07-06 rows — such cells sit off any token
-#: frontier rather than being scored as free).
+#: cell. ``latency`` is wall-clock seconds and ``throughput`` is TOTAL tokens
+#: (input+output+cache) — the two budgets that actually bind on a flat subscription;
+#: ``cost`` is API-equivalent USD (a comparability metric, not a charge); ``tokens``
+#: is mean OUTPUT tokens (the effort/headroom proxy). The token axes are ``None`` on
+#: pre-2026-07-06 rows — such cells sit off the frontier rather than scored as free.
 X_AXES: dict[str, str] = {
     "cost": "mean_cost",
     "latency": "mean_latency",
     "tokens": "mean_output_tokens",
+    "throughput": "mean_total_tokens",
 }
 
 
@@ -286,13 +328,15 @@ def x_value(cell: ReportCell, x_axis: str) -> float | None:
     """
     if x_axis == "tokens" and cell.n_token_epochs < cell.n_epochs:
         return None
+    if x_axis == "throughput" and cell.n_total_token_epochs < cell.n_epochs:
+        return None
     value = getattr(cell, X_AXES[x_axis])
     if value is None or math.isnan(value):
         return None
     return float(value)
 
 
-def report(ledger_path: Path | str, *, x_axis: str = "cost") -> list[ReportCell]:
+def report(ledger_path: Path | str, *, x_axis: str = "latency") -> list[ReportCell]:
     """Aggregate the ledger into per-cell quality/cost rows (Pareto + leakage flagged).
 
     Per-epoch rows are pulled and aggregated in Python so the cell's CI is an
@@ -313,8 +357,17 @@ def report(ledger_path: Path | str, *, x_axis: str = "cost") -> list[ReportCell]
     SELECT task_id, model, effort, variant, spec_sha, value, cost_usd, latency_s,
         TRY_CAST(json_extract(subscores, '$.shuffled_auroc') AS DOUBLE) AS shuffled,
         grade_status, grader_version,
-        input_tokens, output_tokens
+        input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
     FROM ({_LATEST_OK})
+    """
+    # Companion count of the runs _LATEST_OK filters out (run_status != 'ok'): parse_fail
+    # and the infra statuses. Surfaced per cell as n_dropped so a systematic parse_fail
+    # can't hide behind the epochs that did parse (B4) — distinct run_ids, not re-grade rows.
+    drop_sql = f"""
+    SELECT task_id, model, effort, variant, count(DISTINCT run_id) AS n_dropped
+    FROM read_json(?, format='newline_delimited', columns={_LEDGER_COLUMNS})
+    WHERE run_status != 'ok'
+    GROUP BY task_id, model, effort, variant
     """
     con = _connect()
     try:
@@ -324,13 +377,27 @@ def report(ledger_path: Path | str, *, x_axis: str = "cost") -> list[ReportCell]
         # (PR-wide review, F5). strict= catches a description/row length mismatch.
         cols = [d[0] for d in cur.description]
         rows = [dict(zip(cols, r, strict=True)) for r in cur.fetchall()]
+        dropped = {
+            (t, m, e, v): int(n) for t, m, e, v, n in con.execute(drop_sql, [str(path)]).fetchall()
+        }
     finally:
         con.close()
 
     grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = {}
     for r in rows:
         grouped.setdefault((r["task_id"], r["model"], r["effort"], r["variant"]), []).append(r)
-    cells = [_aggregate_cell(key, group) for key, group in grouped.items()]
+    # A cell with SOME ok runs carries its n_dropped; a cell with ZERO ok runs never groups,
+    # so it would vanish from the report entirely — warn so its burned quota isn't invisible.
+    fully_dropped = sorted(k for k in dropped if k not in grouped)
+    if fully_dropped:
+        logger.warning(
+            "%d cell(s) produced only non-ok runs (absent from report): %s",
+            len(fully_dropped),
+            ", ".join("/".join(k) for k in fully_dropped),
+        )
+    cells = [
+        _aggregate_cell(key, group, n_dropped=dropped.get(key, 0)) for key, group in grouped.items()
+    ]
     cells.sort(key=lambda c: (c.task_id, -c.mean_value))
     return _mark_pareto(cells, x_axis=x_axis)
 
@@ -368,8 +435,14 @@ def _epoch_interval(values: np.ndarray) -> tuple[float | None, float | None]:
     return float(ci.ci_low), float(ci.ci_high)
 
 
-def _aggregate_cell(key: tuple[str, str, str, str], group: list[dict[str, Any]]) -> ReportCell:
-    """Aggregate one cell's per-epoch rows into a :class:`ReportCell` (honest stats)."""
+def _aggregate_cell(
+    key: tuple[str, str, str, str], group: list[dict[str, Any]], *, n_dropped: int = 0
+) -> ReportCell:
+    """Aggregate one cell's per-epoch rows into a :class:`ReportCell` (honest stats).
+
+    ``n_dropped`` is the count of this cell's non-ok runs (surfaced from a companion query,
+    since :data:`_LATEST_OK` filters them out before aggregation) — carried, not averaged.
+    """
     task_id, model, effort, variant = key
     values = np.array([row["value"] for row in group], dtype=float)
     costs = np.array([row["cost_usd"] for row in group], dtype=float)
@@ -391,6 +464,33 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[dict[str, Any]])
         [row["output_tokens"] for row in group if row["output_tokens"] is not None], dtype=float
     )
     tokens_ci_low, tokens_ci_high = _epoch_interval(out_toks)
+    cache_read = np.array(
+        [row["cache_read_tokens"] for row in group if row["cache_read_tokens"] is not None],
+        dtype=float,
+    )
+    cache_creation = np.array(
+        [row["cache_creation_tokens"] for row in group if row["cache_creation_tokens"] is not None],
+        dtype=float,
+    )
+    # TOTAL throughput per epoch = input + output + cache_read + cache_creation. A measured
+    # total needs ALL FOUR present — a missing component is *unmeasured*, not free (a warm
+    # cache's measured 0 is kept; a NULL excludes the epoch). Coverage is surfaced as
+    # n_total_token_epochs; empty ⇒ a pre-token ledger ⇒ mean_total_tokens=None.
+    total_toks = np.array(
+        [
+            row["input_tokens"]
+            + row["output_tokens"]
+            + row["cache_read_tokens"]
+            + row["cache_creation_tokens"]
+            for row in group
+            if row["input_tokens"] is not None
+            and row["output_tokens"] is not None
+            and row["cache_read_tokens"] is not None
+            and row["cache_creation_tokens"] is not None
+        ],
+        dtype=float,
+    )
+    total_tokens_ci_low, total_tokens_ci_high = _epoch_interval(total_toks)
 
     # The self-test fires on the WORST epoch — averaging would let one broken run hide.
     max_dev = max((abs(s - 0.5) for s in shuffles), default=None)
@@ -410,6 +510,7 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[dict[str, Any]])
         shuffled_auroc=(sum(shuffles) / len(shuffles)) if shuffles else None,
         leakage=max_dev is not None and max_dev > LEAKAGE_BAND,
         n_unparseable=sum(1 for row in group if row["grade_status"] == "unparseable"),
+        n_dropped=n_dropped,
         n_grader_versions=len({row["grader_version"] for row in group}),
         cost_ci_low=cost_ci_low,
         cost_ci_high=cost_ci_high,
@@ -420,6 +521,12 @@ def _aggregate_cell(key: tuple[str, str, str, str], group: list[dict[str, Any]])
         tokens_ci_low=tokens_ci_low,
         tokens_ci_high=tokens_ci_high,
         n_token_epochs=int(out_toks.size),
+        mean_cache_read_tokens=float(cache_read.mean()) if cache_read.size else None,
+        mean_cache_creation_tokens=float(cache_creation.mean()) if cache_creation.size else None,
+        mean_total_tokens=float(total_toks.mean()) if total_toks.size else None,
+        total_tokens_ci_low=total_tokens_ci_low,
+        total_tokens_ci_high=total_tokens_ci_high,
+        n_total_token_epochs=int(total_toks.size),
     )
 
 
@@ -475,9 +582,23 @@ def compare(ledger_path: Path | str, variant_a: str, variant_b: str) -> list[Com
     WHERE variant IN (?, ?)
     GROUP BY task_id, model, effort, variant
     """
+    # Unparseable rows per (config, variant) — folded into the per-config means the test runs
+    # on, so surface a "read with care" count. Summed below over *paired* configs only (a
+    # config present under just one variant contributes no diff, so its unparseables don't
+    # underlie the delta — 2026-07-11 adversarial review, finding 5).
+    unp_sql = f"""
+    SELECT task_id, model, effort, variant, count(*) AS n_unparseable
+    FROM ({_LATEST_OK})
+    WHERE variant IN (?, ?) AND grade_status = 'unparseable'
+    GROUP BY task_id, model, effort, variant
+    """
     con = _connect()
     try:
         rows = con.execute(sql, [str(path), variant_a, variant_b]).fetchall()
+        unp_by_config: dict[tuple[str, str, str, str], int] = {
+            (t, m, e, v): int(n)
+            for t, m, e, v, n in con.execute(unp_sql, [str(path), variant_a, variant_b]).fetchall()
+        }
     finally:
         con.close()
 
@@ -488,12 +609,35 @@ def compare(ledger_path: Path | str, variant_a: str, variant_b: str) -> list[Com
 
     tasks = sorted({task_id for task_id, _, _ in by_config})
     return [
-        _compare_task(task_id, by_config, variant_a, variant_b)
+        replace(
+            _compare_task(task_id, by_config, variant_a, variant_b),
+            n_unparseable=_paired_unparseables(
+                task_id, by_config, unp_by_config, variant_a, variant_b
+            ),
+        )
         for task_id in tasks
         if any(
             variant_a in v and variant_b in v for (t, _, _), v in by_config.items() if t == task_id
         )
     ]
+
+
+def _paired_unparseables(
+    task_id: str,
+    by_config: dict[tuple[str, str, str], dict[str, float]],
+    unp_by_config: dict[tuple[str, str, str, str], int],
+    variant_a: str,
+    variant_b: str,
+) -> int:
+    """Unparseable rows underlying a task's delta: summed only over configs present under
+    *both* variants (an unpaired config feeds no diff, so its unparseables must not count —
+    else the CLI flags ``⚠Nunp`` "underlying this delta" for a row the pairing excluded)."""
+    total = 0
+    for (t, model, effort), variants in by_config.items():
+        if t == task_id and variant_a in variants and variant_b in variants:
+            total += unp_by_config.get((t, model, effort, variant_a), 0)
+            total += unp_by_config.get((t, model, effort, variant_b), 0)
+    return total
 
 
 def _sign_flip_p(diffs: np.ndarray) -> tuple[float | None, int]:
@@ -613,21 +757,54 @@ def _cell_suspect(cell: ReportCell) -> bool:
     return cell.leakage or cell.n_spec > 1 or cell.n_grader_versions > 1 or cell.n_unparseable > 0
 
 
+#: The axes ``advise`` can rank/optimize on. ``latency`` (default) and ``throughput``
+#: (total input+output+cache tokens) are the budgets that bind on a flat subscription;
+#: ``cost`` (API-equivalent USD) is a comparability metric, not a charge.
+_ADVISE_AXES = ("latency", "throughput", "cost")
+#: (better, worse, equal, superlative) display words per ranking axis.
+_ADVISE_AXIS_WORDS: dict[str, tuple[str, str, str, str]] = {
+    "latency": ("faster", "slower", "same latency", "fastest"),
+    "throughput": ("leaner", "heavier", "same throughput", "leanest"),
+    "cost": ("cheaper", "pricier", "equal cost", "cheapest"),
+}
+
+
+def _usable_total_tokens(cell: ReportCell) -> float | None:
+    """Cell total throughput only when FULLY measured — every epoch carried all four token
+    components (``n_total_token_epochs == n_epochs``). Partial coverage → ``None``, mirroring
+    the ``x_value`` frontier guard so ``advise`` never ranks on a partially-unknown total."""
+    if cell.mean_total_tokens is None or cell.n_total_token_epochs < cell.n_epochs:
+        return None
+    return cell.mean_total_tokens
+
+
+def _advise_axis_value(cell: ReportCell, x_axis: str) -> float:
+    """The cell's position on an advise ranking axis; ``+inf`` when unmeasured (deprioritized)."""
+    metric = {
+        "latency": cell.mean_latency,
+        "throughput": _usable_total_tokens(cell),
+        "cost": cell.mean_cost,
+    }[x_axis]
+    return float("inf") if metric is None or math.isnan(metric) else float(metric)
+
+
 def _advice_note(
     reflex_cell: ReportCell,
     rec: ReportCell,
     quality_delta: float,
-    cost_saving: float,
+    axis_saving: float | None,
+    x_axis: str,
     margin: float,
     group_size: int,
     vacuous: bool,
     suspect: bool,
 ) -> str:
     """The terse, honest explanation shown in the advice table (single source of truth)."""
+    better, worse, equal, superlative = _ADVISE_AXIS_WORDS[x_axis]
     if vacuous:
         base = "n/a: best config scores ≤ margin"
     elif rec.model == reflex_cell.model and rec.effort == reflex_cell.effort:
-        base = "reflex is already the cheapest" if group_size > 1 else "only one config ran"
+        base = f"reflex is already the {superlative}" if group_size > 1 else "only one config ran"
     else:
         if quality_delta > 0:
             qual = f"+{quality_delta:.3f} quality vs reflex"
@@ -635,9 +812,14 @@ def _advice_note(
             qual = f"{-quality_delta:.3f} quality drop (≤ margin {margin:g})"
         else:
             qual = "same quality as reflex"
-        # G3: never claim "cheaper" when the tie-break picked an equal-cost config.
-        cost = "cheaper" if cost_saving > 0 else ("equal cost" if cost_saving == 0 else "pricier")
-        base = f"{qual}, {cost}"
+        # Never claim "faster/leaner/cheaper" when the tie-break picked an equal cell, and
+        # say so explicitly when the ranking axis is unmeasured — throughput is None when
+        # EITHER side lacks full token coverage: a pre-token ledger OR partial mixed-era rows.
+        if axis_saving is None:
+            adj = f"{x_axis} unmeasured (incomplete token coverage)"
+        else:
+            adj = better if axis_saving > 0 else (equal if axis_saving == 0 else worse)
+        base = f"{qual}, {adj}"
     return f"{base} ⚠suspect" if suspect else base
 
 
@@ -645,18 +827,21 @@ def cost_advisor(
     cells: list[ReportCell],
     reflex: str = "opus/max",
     margin: float = 0.02,
+    x_axis: str = "latency",
 ) -> list[AdviceRow]:
-    """Per (task, variant): the cheapest config within ``margin`` of the best, saving vs the reflex.
+    """Per (task, variant): the non-inferior config that minimises ``x_axis``, vs the reflex.
 
-    For each ``(task_id, variant)`` group, anchor non-inferiority at the **best**
-    mean quality any config reached (``best − margin``), recommend the lowest-cost
-    cell that clears it, and report the dollars/latency saved against the *reflex*
-    config (the expensive default, e.g. ``opus/max``, resolved with the fallbacks in
-    :func:`_resolve_reflex`). ``margin`` is an absolute tolerance on the ``[0, 1]``
-    metric (default ``0.02``). A group whose best config scores ``≤ margin`` (nothing
-    works) is marked ``vacuous`` and kept out of the overpay total. Rows are ordered
-    by dollar saving descending. See :class:`AdviceRow` on why this is a margin
-    decision, not a p-value.
+    For each ``(task_id, variant)`` group, anchor non-inferiority at the **best** mean
+    quality any config reached (``best − margin``), then recommend the config that
+    minimises the chosen ``x_axis`` — **latency** by default, or **throughput** (total
+    input+output+cache tokens) or **cost** (API-equivalent USD, a comparability metric on
+    a flat subscription, not a charge). Savings on all three axes are reported against the
+    *reflex* config (the expensive default, e.g. ``opus/max``, resolved with the fallbacks
+    in :func:`_resolve_reflex`); each row leads with, and the list is ordered by, the
+    chosen axis. ``margin`` is an absolute tolerance on the ``[0, 1]`` metric (default
+    ``0.02``). A group whose best config scores ``≤ margin`` (nothing works) is marked
+    ``vacuous`` and kept out of the headline total. See :class:`AdviceRow` on why this is
+    a margin decision, not a p-value.
     """
     parts = reflex.split("/")
     if len(parts) != 2 or not parts[0] or not parts[1]:
@@ -664,6 +849,8 @@ def cost_advisor(
     r_model, r_effort = parts
     if not 0.0 <= margin <= 1.0:
         raise ValueError(f"margin must be in [0, 1] (got {margin})")
+    if x_axis not in _ADVISE_AXES:
+        raise ValueError(f"x_axis must be one of {list(_ADVISE_AXES)} (got {x_axis!r})")
 
     groups: dict[tuple[str, str], list[ReportCell]] = {}
     for c in cells:
@@ -674,15 +861,38 @@ def cost_advisor(
         reflex_cell, fallback_note = _resolve_reflex(group, r_model, r_effort)
         best_value = max(c.mean_value for c in group)
         # Non-inferior = within margin of the BEST config — never the reflex, whose
-        # own failure must not drag the floor down to admit failing-cheap configs.
+        # own failure must not drag the floor down to admit failing configs.
         candidates = [c for c in group if c.mean_value >= best_value - margin]
-        # Cheapest wins; deterministic tie-break so equal-cost cells never reorder.
-        rec = min(candidates, key=lambda c: (c.mean_cost, c.mean_latency, c.model, c.effort))
+        # Minimise the chosen axis; tie-break by the other binding axes then name so equal
+        # cells never reorder (an unmeasured axis sorts +inf → deprioritized, not chosen).
+        rec = min(
+            candidates,
+            key=lambda c: (
+                _advise_axis_value(c, x_axis),
+                c.mean_latency,
+                c.mean_cost,
+                c.model,
+                c.effort,
+            ),
+        )
 
         vacuous = best_value <= margin
         suspect = _cell_suspect(reflex_cell) or _cell_suspect(rec)
         cost_saving = reflex_cell.mean_cost - rec.mean_cost
+        latency_saving = reflex_cell.mean_latency - rec.mean_latency
         quality_delta = rec.mean_value - reflex_cell.mean_value
+        # Both must be FULLY measured (partial coverage → None), so a saving is never
+        # computed against a partially-unknown total (mirrors the frontier's x_value guard).
+        reflex_tp = _usable_total_tokens(reflex_cell)
+        rec_tp = _usable_total_tokens(rec)
+        throughput_saving = (
+            reflex_tp - rec_tp if reflex_tp is not None and rec_tp is not None else None
+        )
+        axis_saving = {
+            "latency": latency_saving,
+            "throughput": throughput_saving,
+            "cost": cost_saving,
+        }[x_axis]
 
         advice.append(
             AdviceRow(
@@ -704,16 +914,21 @@ def cost_advisor(
                 cost_multiple=(
                     (reflex_cell.mean_cost / rec.mean_cost) if rec.mean_cost > 0 else None
                 ),
-                latency_saving=reflex_cell.mean_latency - rec.mean_latency,
+                latency_saving=latency_saving,
                 n_epochs=rec.n_epochs,
                 vacuous=vacuous,
                 suspect=suspect,
                 reflex_fallback=bool(fallback_note),
+                reflex_total_tokens=reflex_tp,
+                rec_total_tokens=rec_tp,
+                throughput_saving=throughput_saving,
+                x_axis=x_axis,
                 note=_advice_note(
                     reflex_cell,
                     rec,
                     quality_delta,
-                    cost_saving,
+                    axis_saving,
+                    x_axis,
                     margin,
                     len(group),
                     vacuous,
@@ -721,5 +936,18 @@ def cost_advisor(
                 ),
             )
         )
-    advice.sort(key=lambda a: a.cost_saving, reverse=True)
+    # Order by the chosen axis's saving descending (biggest win first); an unmeasured
+    # throughput saving (a pre-token ledger) sorts last.
+    advice.sort(
+        key=lambda a: (
+            a.latency_saving
+            if a.x_axis == "latency"
+            else (
+                a.cost_saving
+                if a.x_axis == "cost"
+                else (a.throughput_saving if a.throughput_saving is not None else float("-inf"))
+            )
+        ),
+        reverse=True,
+    )
     return advice

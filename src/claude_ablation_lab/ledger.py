@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+import os
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,37 @@ LedgerKey = tuple[str, str, str, str, int, str]
 
 # Persisted as JSON strings (see module docstring); decoded on load.
 _JSON_FIELDS = ("subscores", "details", "tool_calls")
+
+
+def _jsonl_default(value: object) -> str:
+    """`json.dumps(default=...)` fallback: coerce a non-serialisable field *value* to ``str``.
+
+    A grader that stashes an odd object in ``details``/``subscores`` must never turn a paid
+    ``ok`` run into a crashed sweep (which would re-pay the cell on resume). The coercion is
+    logged loudly — never silent — and the stringified value stays visible in the row.
+    ``default=`` only covers *values*; non-str dict keys and non-deep-copyable values
+    (which ``asdict`` chokes on before ``json`` is even reached) are handled by the
+    :func:`_degraded_jsonl_dict` fallback in :func:`append_row`.
+    """
+    logger.warning("non-serialisable ledger value coerced to str: %r", value)
+    return str(value)
+
+
+def _degraded_jsonl_dict(row: LedgerRow, reason: Exception) -> dict[str, Any]:
+    """A guaranteed-serialisable stand-in row when the normal encode raises.
+
+    Keeps every scalar field verbatim (read via ``getattr`` — no ``asdict`` deep-copy, which
+    is itself a failure mode for a non-deep-copyable grader value) and replaces the three
+    grader-provided JSON fields with a placeholder recording *why*. So a paid ``ok`` run is
+    never lost to a serialisation failure (bad dict keys, un-deep-copyable objects) — the
+    row lands, degraded and loudly logged, instead of crashing the sweep into a re-pay.
+    """
+    out: dict[str, Any] = {f.name: getattr(row, f.name) for f in fields(row)}
+    out["mcp_servers"] = list(row.mcp_servers)
+    placeholder = json.dumps({"_unserialisable": str(reason)})
+    for key in _JSON_FIELDS:
+        out[key] = placeholder
+    return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +152,7 @@ class LedgerRow:
         row = asdict(self)
         row["mcp_servers"] = list(self.mcp_servers)
         for key in _JSON_FIELDS:
-            row[key] = json.dumps(row[key], sort_keys=True)
+            row[key] = json.dumps(row[key], sort_keys=True, default=_jsonl_default)
         return row
 
 
@@ -144,12 +176,34 @@ def _row_from_jsonl_dict(raw: dict[str, Any]) -> LedgerRow:
 
 
 def append_row(path: Path | str, row: LedgerRow) -> None:
-    """Append one row as a JSON line (crash-safe: one flushed write per cell)."""
+    """Append one row as a JSON line (crash-safe: one fsync'd write per cell).
+
+    The paid ``ok`` row is the only durable record that a cell was run, so this write must
+    not be lost: a non-serialisable grader value is coerced (via ``_jsonl_default``), and the
+    harder cases ``default=`` can't reach — bad dict keys, un-deep-copyable objects that
+    break ``asdict`` — fall back to a :func:`_degraded_jsonl_dict` placeholder row rather
+    than raising. The line is built *before* the file is opened (a failure can't leave a
+    half-written line) and the write is ``fsync``'d so an OS crash between flush and
+    writeback can't drop an apparently-written row (which would silently re-pay the cell).
+    """
+    try:
+        line = json.dumps(row.to_jsonl_dict(), default=_jsonl_default)
+    except Exception as exc:
+        # A paid ok row is the ONLY record that a cell ran; losing it re-pays on resume, so ANY
+        # serialisation failure must DEGRADE (loud ERROR + a visible placeholder row), never crash
+        # the sweep. A grader can stash an arbitrary object in details/subscores, which can raise
+        # an arbitrary error — bad dict keys (TypeError), un-deep-copyable values, a self-referential
+        # object that makes asdict recurse to RecursionError, etc. Enumerating types was whack-a-mole
+        # across two review rounds; the invariant is what matters, and degrading-loudly ≠ failing-silently.
+        logger.error("ledger row %s not serialisable (%s) — writing degraded row", row.run_id, exc)
+        line = json.dumps(_degraded_jsonl_dict(row, exc), default=_jsonl_default)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(row.to_jsonl_dict()) + "\n")
+        handle.write(line + "\n")
         handle.flush()
+        os.fsync(handle.fileno())
+        os.fsync(handle.fileno())
 
 
 def load_rows(path: Path | str) -> list[LedgerRow]:

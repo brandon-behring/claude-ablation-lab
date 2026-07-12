@@ -18,9 +18,11 @@ variants:
   - ~/Claude/research_toolkit@HEAD
 epochs: 3
 
-# (model, effort) validity matrix — `max` effort is Opus-only. A model omitted here
-# is assumed to support every effort in `efforts`.
+# Per-grid effort narrowing, on top of the provider capability matrix. `max` effort is
+# Opus-only here. Haiku 4.5 has NO effort parameter (CV2), so it is pinned to one
+# canonical cell — the capability matrix collapses it regardless; this just makes the
+# intent explicit. A model omitted here supports every effort in `efforts`.
 effort_support:
-  haiku: [low, high]
+  haiku: [low]
   sonnet: [low, high]
   opus: [low, high, max]

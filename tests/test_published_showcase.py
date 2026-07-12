@@ -89,10 +89,12 @@ def test_published_file_has_the_registered_showcase_shape() -> None:
 
 @pytest.mark.unit
 def test_advise_on_published_ledger_excludes_the_vacuous_control() -> None:
-    # Golden `advise` over the committed showcase: the two saturated tasks are real
-    # opus→haiku downgrades; the without-skill control (all 0.0) is vacuous and MUST be
-    # flagged n/a and kept out of the overpay total — the review's shipped-data finding
-    # (a control variant was banking 37% of the headline). Pins the reconciled $0.17.
+    # Golden `advise` over the committed showcase (default LATENCY-led, 2026-07-11
+    # re-denomination). The two saturated tasks are real opus→cheaper downgrades; the
+    # without-skill control (all 0.0) is vacuous and MUST be flagged n/a and kept out of
+    # the headline total — the review's shipped-data finding (a control variant was banking
+    # 37% of the old $ headline). On LATENCY the fastest non-inferior config wins, which is
+    # NOT the cheapest-$ one: t3 → sonnet/low (haiku burns more wall-clock), t4 → haiku/high.
     from claude_ablation_lab.analyze import cost_advisor, report
 
     rows = {(a.task_id, a.variant): a for a in cost_advisor(report(_PUBLISHED), reflex="opus/max")}
@@ -100,9 +102,16 @@ def test_advise_on_published_ledger_excludes_the_vacuous_control() -> None:
     without_skill = rows[("t4_demo_infra", ".demo-infra@without-skill")]
     t3 = rows[("t3_verbatim_anchor", "none")]
 
+    assert all(a.x_axis == "latency" for a in rows.values())  # latency is the default lead axis
     assert (with_skill.rec_model, with_skill.rec_effort) == ("haiku", "high")
-    assert with_skill.vacuous is False and with_skill.cost_saving == pytest.approx(0.1137, abs=2e-3)
-    assert t3.vacuous is False and t3.cost_saving == pytest.approx(0.0568, abs=2e-3)
+    assert with_skill.vacuous is False
+    assert with_skill.latency_saving == pytest.approx(3.525, abs=0.05)
+    assert with_skill.cost_saving == pytest.approx(0.1137, abs=2e-3)  # $ still computed (info only)
+    # Latency picks sonnet/low over the cheaper-$ haiku/high — the whole point of the reframe.
+    assert (t3.rec_model, t3.rec_effort) == ("sonnet", "low")
+    assert t3.vacuous is False and t3.latency_saving == pytest.approx(5.996, abs=0.05)
     assert without_skill.vacuous is True  # every config scores 0.0 → advisory only
-    real_total = sum(a.cost_saving for a in rows.values() if not a.vacuous)
-    assert real_total == pytest.approx(0.1705, abs=2e-3)  # only the two real rows
+    # The reproducible showcase predates token persistence (2026-07-06), so throughput is None.
+    assert with_skill.throughput_saving is None
+    latency_total = sum(a.latency_saving for a in rows.values() if not a.vacuous)
+    assert latency_total == pytest.approx(9.52, abs=0.1)  # only the two real rows (5.996 + 3.525)

@@ -260,6 +260,39 @@ def test_run_sweep_happy_path_writes_graded_rows(tmp_path) -> None:
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize(
+    "exc",
+    [
+        OSError("disk full"),
+        # A lone surrogate in model output → UnicodeEncodeError (a ValueError) from
+        # write_text; a bare `except OSError` would miss it and re-pay (review finding 1).
+        UnicodeEncodeError("utf-8", "\ud800", 0, 1, "surrogates not allowed"),
+    ],
+)
+def test_run_sweep_records_ok_row_even_if_output_sidecar_write_fails(
+    exc, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    # B3 invariant: a paid `ok` run always yields a durable ledger row, so resume skips it
+    # (never re-pays), even when the output sidecar write fails mid-sweep.
+    def boom(*a: object, **k: object) -> str:
+        raise exc
+
+    monkeypatch.setattr("claude_ablation_lab.orchestrate._persist_output", boom)
+    grid = Grid(("haiku",), ("low",), ("none",), 1)
+    runner = FakeRunner(lambda n, **kw: _ok(run_id=f"r{n}"))
+    summary = run_sweep([_anchor_task()], grid, runner=runner, **_sweep_kwargs(tmp_path))
+
+    assert (summary.total, summary.ran, summary.failed) == (1, 1, 0)  # not a crash
+    rows = load_rows(tmp_path / "ledger.jsonl")
+    assert len(rows) == 1 and rows[0].run_status == "ok"  # the paid row landed
+    assert rows[0].output_path is None  # sidecar failed gracefully
+
+    resume = FakeRunner(lambda n, **kw: _ok(run_id=f"x{n}"))
+    again = run_sweep([_anchor_task()], grid, runner=resume, **_sweep_kwargs(tmp_path))
+    assert again.skipped == 1 and resume.calls == 0  # resume treats it as done — no re-pay
+
+
+@pytest.mark.unit
 def test_run_sweep_is_resumable(tmp_path) -> None:
     grid = Grid(("haiku",), ("low",), ("none",), 1)
     first = FakeRunner(lambda n, **kw: _ok(run_id=f"r{n}"))
@@ -491,7 +524,7 @@ def test_regrade_row_preserves_run_metadata_and_carries_artifact_missing() -> No
 # --- estimate ---------------------------------------------------------------- #
 
 
-def _ok_usage(*, run_id: str) -> RunResult:
+def _ok_usage(*, run_id: str, usage: dict[str, object] | None = None) -> RunResult:
     return RunResult(
         run_id=run_id,
         status="ok",
@@ -502,7 +535,7 @@ def _ok_usage(*, run_id: str) -> RunResult:
         model_resolved="m",
         num_turns=2,
         session_id="s",
-        usage={"input_tokens": 100, "output_tokens": 50},
+        usage={"input_tokens": 100, "output_tokens": 50} if usage is None else usage,
         transcript_path=None,
         raw=None,
     )
@@ -511,7 +544,8 @@ def _ok_usage(*, run_id: str) -> RunResult:
 @pytest.mark.unit
 def test_estimate_projects_from_one_cell(tmp_path) -> None:
     runner = FakeRunner(lambda n, **kw: _ok_usage(run_id=f"r{n}"))
-    grid = Grid(("haiku", "sonnet"), ("low", "high"), ("none",), 1)  # 4 cells
+    # Both effort-capable, so no capability-matrix collapse — a clean 2×2 = 4-cell projection.
+    grid = Grid(("sonnet", "opus"), ("low", "high"), ("none",), 1)  # 4 cells
     est = estimate_sweep(
         [_anchor_task()], grid, runner=runner, neutral_cwd=tmp_path, sleep=lambda _s: None
     )
@@ -520,6 +554,24 @@ def test_estimate_projects_from_one_cell(tmp_path) -> None:
     assert est.projected_turns == 8  # 2 turns × 4 cells
     assert est.projected_cost_usd == pytest.approx(0.04)
     assert est.calibration_status == "ok"
+
+
+@pytest.mark.unit
+def test_estimate_hardens_malformed_usage_tokens(tmp_path) -> None:
+    # B5: a NaN/negative token field must not crash the pre-flight. The old raw int(...)
+    # raised on int(NaN); routing through _usage_token floors not-measured to 0 instead.
+    runner = FakeRunner(
+        lambda n, **kw: _ok_usage(
+            run_id=f"r{n}", usage={"input_tokens": float("nan"), "output_tokens": -5}
+        )
+    )
+    grid = Grid(("sonnet", "opus"), ("low", "high"), ("none",), 1)  # 4 cells
+    est = estimate_sweep(
+        [_anchor_task()], grid, runner=runner, neutral_cwd=tmp_path, sleep=lambda _s: None
+    )
+    assert est.cell_input_tokens == 0 and est.cell_output_tokens == 0  # both floored
+    assert est.projected_input_tokens == 0  # 0 × 4 cells, no crash
+    assert est.calibration_status == "ok"  # a clean floor, not a raise
 
 
 @pytest.mark.unit

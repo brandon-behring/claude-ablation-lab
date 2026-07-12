@@ -35,6 +35,8 @@ def _row(
     grade_status="ok",
     in_tok=None,
     out_tok=None,
+    cache_read=None,
+    cache_creation=None,
 ) -> None:
     append_row(
         led,
@@ -62,6 +64,8 @@ def _row(
             ts=ts,
             input_tokens=in_tok,
             output_tokens=out_tok,
+            cache_read_tokens=cache_read,
+            cache_creation_tokens=cache_creation,
         ),
     )
 
@@ -126,6 +130,36 @@ def test_report_no_token_rows_reads_none_not_zero(tmp_path) -> None:
     assert cell.mean_output_tokens is None
     assert cell.mean_input_tokens is None
     assert cell.n_token_epochs == 0
+
+
+@pytest.mark.unit
+def test_report_total_throughput_sums_all_four_token_components(tmp_path) -> None:
+    # TOTAL throughput = input + output + cache_read + cache_creation, aggregated from the
+    # ledger (not set directly). A measured 0 (warm cache creation) counts as measured.
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="e0", epoch=0, in_tok=100, out_tok=200, cache_read=1000, cache_creation=0)
+    _row(led, rid="e1", epoch=1, in_tok=100, out_tok=200, cache_read=1000, cache_creation=0)
+    [cell] = report(led)
+    assert cell.n_total_token_epochs == 2  # every epoch carried all four components
+    assert cell.mean_total_tokens == pytest.approx(1300.0)  # 100 + 200 + 1000 + 0
+    assert cell.mean_output_tokens == pytest.approx(200.0)  # the output axis is unchanged
+
+
+@pytest.mark.unit
+def test_report_total_throughput_excludes_epoch_missing_cache(tmp_path) -> None:
+    # A row with output tokens but MISSING cache is NOT a fully-measured total (missing is
+    # unmeasured, not free): that epoch is excluded from the total, so n_total_token_epochs
+    # < n_epochs and the cell cannot sit on the throughput frontier.
+    from claude_ablation_lab.analyze import x_value
+
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="full", epoch=0, in_tok=100, out_tok=200, cache_read=1000, cache_creation=0)
+    _row(led, rid="nocache", epoch=1, in_tok=100, out_tok=200)  # cache NULL → not a full total
+    [cell] = report(led)
+    assert cell.n_epochs == 2
+    assert cell.n_token_epochs == 2  # output measured on both epochs
+    assert cell.n_total_token_epochs == 1  # but a full total only on the first
+    assert x_value(cell, "throughput") is None  # partial coverage → off the throughput frontier
 
 
 @pytest.mark.unit
@@ -300,6 +334,32 @@ def test_report_counts_unparseable_as_honest_zero(tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_report_counts_dropped_non_ok_runs(tmp_path) -> None:
+    # B4: parse_fail / infra runs are excluded from the mean but must not be invisible —
+    # they surface as n_dropped so a systematic failure can't hide behind the ok epochs.
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="ok0", epoch=0, value=0.8)
+    _row(led, rid="pf", epoch=1, run_status="parse_fail", value=0.0)
+    _row(led, rid="infra", epoch=2, run_status="infra_error", value=0.0)
+    [cell] = report(led)
+    assert cell.n_epochs == 1 and cell.mean_value == pytest.approx(0.8)  # only the ok run
+    assert cell.n_dropped == 2  # the two non-ok runs surfaced, not hidden
+
+
+@pytest.mark.unit
+def test_report_warns_when_a_cell_has_only_non_ok_runs(tmp_path, caplog) -> None:
+    # B4: a cell with ZERO ok runs never groups, so it's absent from the report entirely.
+    # Warn so its burned quota isn't silently invisible.
+    led = tmp_path / "l.jsonl"
+    _row(led, rid="ok0", task="t1", value=0.8)  # a normal cell so the report isn't empty
+    _row(led, rid="pf", task="t2", run_status="parse_fail", value=0.0)  # fully-dropped cell
+    with caplog.at_level("WARNING"):
+        cells = report(led)
+    assert {c.task_id for c in cells} == {"t1"}  # t2 absent (no ok run)
+    assert any("only non-ok runs" in m for m in caplog.messages)
+
+
+@pytest.mark.unit
 def test_report_flags_mixed_grader_versions(tmp_path) -> None:
     led = tmp_path / "l.jsonl"
     # A partial re-grade must not silently mix metric definitions within a cell.
@@ -332,6 +392,57 @@ def test_compare_six_same_sign_pairs_are_real(tmp_path) -> None:
     assert row.delta == pytest.approx(0.30)
     assert row.p_value == pytest.approx(2 / 64)
     assert row.real is True
+    assert row.n_unparseable == 0  # clean comparison — nothing folded in at 0.0
+
+
+@pytest.mark.unit
+def test_compare_surfaces_underlying_unparseable_count(tmp_path) -> None:
+    # A1: the delta rests on per-config means that fold unparseables in at 0.0 — surface
+    # the count so a reader treats it with care rather than trusting a silently-dragged mean.
+    led = tmp_path / "l.jsonl"
+    va, vb = "repo@a", "repo@b"
+    for cfg, (model, effort) in enumerate(_SIX_CONFIGS):
+        _row(led, rid=f"a{cfg}", task="t2", variant=va, model=model, effort=effort, value=0.50)
+        _row(led, rid=f"b{cfg}", task="t2", variant=vb, model=model, effort=effort, value=0.80)
+    # One config's B run is unparseable (scored 0.0, folded into that config's B mean).
+    _row(
+        led,
+        rid="bunp",
+        task="t2",
+        variant=vb,
+        model="opus",
+        effort="high",
+        value=0.0,
+        grade_status="unparseable",
+        epoch=1,
+    )
+    [row] = compare(led, va, vb)
+    assert row.n_unparseable == 1  # surfaced for the reader
+
+
+@pytest.mark.unit
+def test_compare_unparseable_count_excludes_unpaired_configs(tmp_path) -> None:
+    # Adversarial review finding 5: an unparseable in a config present under only ONE variant
+    # feeds no paired diff, so it must NOT inflate the "underlying this delta" count.
+    led = tmp_path / "l.jsonl"
+    va, vb = "repo@a", "repo@b"
+    # One cleanly-paired config (both variants) — the only pair the delta uses.
+    _row(led, rid="a0", task="t2", variant=va, model="haiku", effort="low", value=0.5)
+    _row(led, rid="b0", task="t2", variant=vb, model="haiku", effort="low", value=0.8)
+    # An unparseable under variant A in a config ABSENT under variant B (unpaired).
+    _row(
+        led,
+        rid="aunp",
+        task="t2",
+        variant=va,
+        model="opus",
+        effort="high",
+        value=0.0,
+        grade_status="unparseable",
+    )
+    [row] = compare(led, va, vb)
+    assert row.n_pairs == 1  # only haiku/low is paired
+    assert row.n_unparseable == 0  # the unpaired opus/high unparseable is excluded
 
 
 @pytest.mark.unit
@@ -413,6 +524,8 @@ def _cell(
     value: float = 1.0,
     cost: float = 0.01,
     lat: float = 1.0,
+    total_tokens: float | None = None,
+    total_token_epochs: int | None = None,
     n: int = 3,
     leakage: bool = False,
     n_spec: int = 1,
@@ -437,6 +550,15 @@ def _cell(
         leakage=leakage,
         n_unparseable=n_unparseable,
         n_grader_versions=n_grader_versions,
+        mean_total_tokens=total_tokens,
+        # A directly-set total counts as fully measured (every epoch) unless a test overrides
+        # coverage; the advise guard (n_total_token_epochs == n_epochs) then treats it as
+        # usable, or skips it when partial.
+        n_total_token_epochs=(
+            total_token_epochs
+            if total_token_epochs is not None
+            else (n if total_tokens is not None else 0)
+        ),
     )
 
 
@@ -447,7 +569,7 @@ def test_advise_recommends_cheapest_on_quality_tie() -> None:
         _cell(model="sonnet", effort="high", value=1.0, cost=0.050, lat=10.0),
         _cell(model="haiku", effort="high", value=1.0, cost=0.005, lat=8.0),
     ]
-    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02, x_axis="cost")
     assert (row.rec_model, row.rec_effort) == ("haiku", "high")
     assert row.reflex_fallback is False  # opus/high was present exactly
     assert row.quality_delta == pytest.approx(0.0)
@@ -496,7 +618,7 @@ def test_advise_reflex_falls_back_to_highest_effort_of_model() -> None:
         _cell(model="opus", effort="high", value=1.0, cost=0.09),
         _cell(model="haiku", effort="high", value=1.0, cost=0.006),
     ]
-    [row] = cost_advisor(cells, reflex="opus/max", margin=0.02)
+    [row] = cost_advisor(cells, reflex="opus/max", margin=0.02, x_axis="cost")
     assert (row.reflex_model, row.reflex_effort) == ("opus", "high")
     assert row.reflex_fallback is True
     assert "cheaper" in row.note  # the fallback surfaces via reflex_fallback + a '*', not the note
@@ -520,7 +642,7 @@ def test_advise_already_optimal_when_reflex_is_cheapest() -> None:
         _cell(model="opus", effort="high", value=1.0, cost=0.01),  # reflex AND cheapest
         _cell(model="haiku", effort="high", value=1.0, cost=0.02),
     ]
-    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02, x_axis="cost")
     assert (row.rec_model, row.rec_effort) == ("opus", "high")
     assert row.cost_saving == pytest.approx(0.0)
     assert "already the cheapest" in row.note
@@ -552,7 +674,7 @@ def test_advise_orders_by_dollar_saving_descending() -> None:
         _cell(task="t_big", model="opus", effort="high", cost=0.10),
         _cell(task="t_big", model="haiku", effort="low", cost=0.01),
     ]
-    advice = cost_advisor(cells, reflex="opus/high")
+    advice = cost_advisor(cells, reflex="opus/high", x_axis="cost")
     assert [a.task_id for a in advice] == ["t_big", "t_small"]  # biggest overpay first
 
 
@@ -600,7 +722,7 @@ def test_advise_floors_at_best_not_reflex() -> None:
         _cell(model="sonnet", effort="high", value=1.0, cost=0.05),
         _cell(model="haiku", effort="high", value=0.0, cost=0.005),
     ]
-    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02, x_axis="cost")
     assert (row.rec_model, row.rec_effort) == ("sonnet", "high")  # NOT haiku(0.0)
     assert row.best_value == pytest.approx(1.0)
     assert row.quality_delta == pytest.approx(1.0)  # the reflex was itself suboptimal
@@ -642,7 +764,7 @@ def test_advise_note_says_equal_cost_not_cheaper_on_a_cost_tie() -> None:
         _cell(model="opus", effort="high", value=1.0, cost=0.05, lat=10.0),
         _cell(model="haiku", effort="high", value=1.0, cost=0.05, lat=8.0),
     ]
-    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02, x_axis="cost")
     assert (row.rec_model, row.rec_effort) == ("haiku", "high")
     assert row.cost_saving == pytest.approx(0.0)
     assert "equal cost" in row.note and "cheaper" not in row.note
@@ -659,6 +781,78 @@ def test_advise_surfaces_absolute_quality_and_epochs() -> None:
     [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)
     assert row.rec_value == pytest.approx(0.90)
     assert row.n_epochs == 4
+
+
+@pytest.mark.unit
+def test_advise_latency_led_prefers_fastest_not_cheapest() -> None:
+    # Default axis is LATENCY: among quality-tied non-inferior configs the FASTEST wins,
+    # even when a different config is cheaper in $ (the flat-subscription reframe).
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.08, lat=20.0),
+        _cell(model="haiku", effort="high", value=1.0, cost=0.005, lat=15.0),  # cheapest $
+        _cell(model="sonnet", effort="low", value=1.0, cost=0.05, lat=8.0),  # fastest
+    ]
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02)  # default x_axis=latency
+    assert (row.rec_model, row.rec_effort) == ("sonnet", "low")  # fastest, not cheapest haiku
+    assert row.x_axis == "latency"
+    assert row.latency_saving == pytest.approx(12.0)
+    assert "faster" in row.note
+
+
+@pytest.mark.unit
+def test_advise_throughput_led_prefers_leanest() -> None:
+    # --x-axis throughput ranks on TOTAL tokens (input+output+cache); the leanest wins and
+    # the saving is reflex − rec total tokens.
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.08, lat=10.0, total_tokens=9000),
+        _cell(model="haiku", effort="high", value=1.0, cost=0.005, lat=8.0, total_tokens=12000),
+        _cell(model="sonnet", effort="low", value=1.0, cost=0.05, lat=9.0, total_tokens=3000),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02, x_axis="throughput")
+    assert (row.rec_model, row.rec_effort) == ("sonnet", "low")  # leanest total-token config
+    assert row.x_axis == "throughput"
+    assert row.throughput_saving == pytest.approx(6000.0)  # 9000 − 3000
+    assert "leaner" in row.note
+
+
+@pytest.mark.unit
+def test_advise_throughput_none_on_pre_token_ledger() -> None:
+    # A pre-2026-07-06 ledger carries no token counts, so throughput saving is None and the
+    # note says so (never a silent 0); ranking falls to the latency/cost tie-breaks.
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, cost=0.08, lat=10.0),
+        _cell(model="haiku", effort="high", value=1.0, cost=0.005, lat=8.0),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02, x_axis="throughput")
+    assert row.throughput_saving is None
+    assert "throughput unmeasured" in row.note
+
+
+@pytest.mark.unit
+def test_advise_rejects_bad_x_axis() -> None:
+    with pytest.raises(ValueError, match="x_axis must be one of"):
+        cost_advisor([_cell()], reflex="opus/high", x_axis="dollars")
+
+
+@pytest.mark.unit
+def test_advise_throughput_skips_partial_coverage_cell() -> None:
+    # A cell whose total is only PARTIALLY measured (n_total_token_epochs < n_epochs) is not
+    # usable on the throughput axis, so a config that merely LOOKS leaner on a partial total
+    # is never picked (it deprioritizes to +inf) — the fully-measured config wins.
+    cells = [
+        _cell(model="opus", effort="high", value=1.0, lat=10.0, total_tokens=9000),  # full
+        _cell(
+            model="haiku",
+            effort="high",
+            value=1.0,
+            lat=8.0,
+            total_tokens=1000,  # looks leaner…
+            total_token_epochs=1,  # …but only 1 of 3 epochs measured → not usable
+        ),
+    ]
+    [row] = cost_advisor(cells, reflex="opus/high", margin=0.02, x_axis="throughput")
+    assert (row.rec_model, row.rec_effort) == ("opus", "high")  # partial haiku skipped
+    assert row.throughput_saving == pytest.approx(0.0)  # rec == reflex (both fully measured)
 
 
 @pytest.mark.unit

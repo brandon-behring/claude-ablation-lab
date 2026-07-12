@@ -71,10 +71,15 @@ def test_showcase_grid_runs_t4_under_both_demo_refs() -> None:
 
 
 @pytest.mark.unit
-def test_showcase_grid_clears_the_significance_floor() -> None:
-    # The headline compare needs enough matched (model, effort) pairs for the exact
-    # sign-flip test to reach p <= 0.05 (min p = 2/2^n → n >= 6). Pin the grid to that
-    # floor AND to pairedness, so a grid edit can't silently demote the verdict.
+def test_showcase_grid_haiku_effort_collapse_drops_below_significance_floor() -> None:
+    # HONESTY (CV2, 2026-07-11): the showcase's original n=6 counted haiku/low and
+    # haiku/high as distinct, but Haiku 4.5 has NO effort parameter — they are ONE config.
+    # The provider capability matrix now collapses them, so the *reproducible* grid yields
+    # 5 paired configs — BELOW the exact sign-flip floor (min p = 2/2^n needs n >= 6), so
+    # the designed positive control can no longer print real=yes on reproduction. The
+    # committed 54-row ledger predates the matrix and stays valid as history; restoring a
+    # real=yes needs a genuine 6th config (e.g. a medium tier) + a re-run. Pin the honest
+    # post-matrix state so this gap can't be silently forgotten.
     from claude_ablation_lab.analyze import MIN_PAIRS_FOR_REAL
 
     grid = load_grid(REPO / "grids" / "showcase.yaml")
@@ -85,9 +90,11 @@ def test_showcase_grid_clears_the_significance_floor() -> None:
         for variant in (".demo-infra@with-skill", ".demo-infra@without-skill")
     }
     with_skill, without_skill = configs.values()
-    assert with_skill == without_skill  # paired: identical config sets under both refs
-    assert len(with_skill) >= MIN_PAIRS_FOR_REAL
-    assert len(with_skill) >= 6  # 2/2^6 = 0.031 — the first n where p <= 0.05 is possible
+    assert with_skill == without_skill  # still paired: identical config sets under both refs
+    assert ("haiku", "low") in with_skill  # canonical haiku cell kept
+    assert ("haiku", "high") not in with_skill  # inert duplicate collapsed
+    assert len(with_skill) == 5  # 5 distinct configs, not the naive 6
+    assert len(with_skill) < MIN_PAIRS_FOR_REAL  # honestly below the sign-flip floor now
 
 
 @pytest.mark.integration

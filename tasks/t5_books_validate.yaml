@@ -1,4 +1,5 @@
-# T5 — books authoring, single-turn (the DISCRIMINATING task).
+# T5 — constrained MDX repair, single-turn (the DISCRIMINATING task). NOT open-ended authoring:
+# it is bounded repair of a seeded-broken chapter against a fixed 15-item editorial validator.
 # Fix a seeded-broken MDX chapter so it satisfies book-scaffold editorial conventions. Unlike the
 # saturated t3/t4, this is built to separate configs on a difficulty ladder (mechanical → fuzzy →
 # semantic → a required citation addition, plus tripwires). The chapter + conventions + registries
@@ -6,11 +7,11 @@
 # model returns the corrected MDX, graded by check.py against examples/books-validate/expected.json.
 # The answer key is never shown to the model. See examples/books-validate/README.md.
 id: t5_books_validate
-domain: authoring
+domain: mdx_repair
 grader: books_validate
 mode: single
 infra_repo: null
 timeout_s: 300
-tags: [authoring, single-turn, discriminating, mdx]
+tags: [constrained-repair, single-turn, discriminating, mdx]
 prompt: ""
 # params.fixture_root defaults to the packaged examples/books-validate; override to point at a copy.

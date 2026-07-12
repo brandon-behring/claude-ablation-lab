@@ -46,6 +46,7 @@ _X_AXIS_SPEC = {
     "cost": ("cost_ci_low", "cost_ci_high", "mean cost ($ / cell)"),
     "latency": ("latency_ci_low", "latency_ci_high", "mean latency (s / cell)"),
     "tokens": ("tokens_ci_low", "tokens_ci_high", "mean output tokens / cell"),
+    "throughput": ("total_tokens_ci_low", "total_tokens_ci_high", "mean total tokens / cell"),
 }
 #: use a log x-scale when the (positive) x values span at least this ratio — wide
 #: cost ranges (haiku/low → opus/max is routinely >10×) squash to a left-edge blob

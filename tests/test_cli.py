@@ -53,7 +53,9 @@ def test_run_dry_run_expands_without_calling_claude() -> None:
         ],
     )
     assert result.exit_code == 0
-    assert "4 cells" in result.stdout  # 2 models × 2 efforts × 1 epoch
+    # Haiku has no effort parameter (CV2) → the capability matrix collapses it to one cell:
+    # haiku/low + sonnet/{low,high} = 3 cells (not the naive 2 models × 2 efforts = 4).
+    assert "3 cells" in result.stdout
 
 
 @pytest.mark.unit
@@ -179,7 +181,7 @@ def test_advise_renders_downgrade(tmp_path) -> None:
     result = cli.invoke(app, ["advise", str(led), "--reflex", "opus/high"])
     assert result.exit_code == 0
     assert "advise" in result.stdout  # the table title rendered (not the empty-ledger path)
-    assert "overpay" in result.stdout  # the savings footnote
+    assert "saved" in result.stdout  # the latency-led savings footnote (Σ ... saved)
 
 
 @pytest.mark.unit

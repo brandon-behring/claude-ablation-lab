@@ -13,6 +13,8 @@ Every run writes a full diagnostic envelope to a transcript sidecar.
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import subprocess
 import time
@@ -35,6 +37,8 @@ __all__ = [
     "CATALOG_VERIFIED_CLAUDE_VERSION",
     "HERMETIC_DISALLOWED_TOOLS",
 ]
+
+logger = logging.getLogger(__name__)
 
 RunStatus = Literal["ok", "rate_limited", "infra_error", "timeout", "parse_fail"]
 
@@ -317,6 +321,32 @@ def _resolve_model(payload: dict[str, Any]) -> str | None:
     return None
 
 
+def _finite_float(value: object) -> float:
+    """A finite float from a CLI numeric field; ``NaN``/``inf``/malformed → ``0.0``.
+
+    The CLI JSON can carry a literal ``NaN`` (e.g. a cost calc that divided by zero),
+    which is truthy and survives ``... or 0.0`` to poison every downstream number, or a
+    non-numeric value on which ``float()`` raises. Never raises, never returns non-finite.
+    The raw payload is still preserved verbatim on ``RunResult.raw`` / the transcript.
+    """
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError: a huge JSON *integer* literal (e.g. 10**400) that float() can't hold.
+        return 0.0
+    return result if math.isfinite(result) else 0.0
+
+
+def _finite_nonneg_int(value: object) -> int:
+    """A finite, non-negative int from a CLI numeric field; malformed/NaN → ``0``.
+
+    Guards the same ``int(... or 0)`` fragility for count fields (e.g. ``num_turns``):
+    ``int(NaN)``/``int("abc")`` would otherwise raise on the paid ``ok`` path.
+    """
+    result = _finite_float(value)
+    return int(result) if result >= 0 else 0
+
+
 def result_from_payload(
     payload: dict[str, Any],
     *,
@@ -339,11 +369,11 @@ def result_from_payload(
         run_id=run_id,
         status=status,
         output=str(payload.get("result", "")),
-        cost_usd=float(payload.get("total_cost_usd") or 0.0),
+        cost_usd=_finite_float(payload.get("total_cost_usd")),
         latency_s=latency_s,
         returncode=returncode,
         model_resolved=_resolve_model(payload),
-        num_turns=int(payload.get("num_turns") or 0),
+        num_turns=_finite_nonneg_int(payload.get("num_turns")),
         session_id=payload.get("session_id"),
         usage=usage if isinstance(usage, dict) else {},
         transcript_path=transcript_path,
@@ -429,9 +459,16 @@ class ClaudeCodeRunner:
     def _write_transcript(self, run_id: str, envelope: dict[str, Any]) -> str | None:
         if self.transcript_dir is None:
             return None
-        self.transcript_dir.mkdir(parents=True, exist_ok=True)
-        path = self.transcript_dir / f"{run_id}.json"
-        path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
+        try:
+            self.transcript_dir.mkdir(parents=True, exist_ok=True)
+            path = self.transcript_dir / f"{run_id}.json"
+            path.write_text(json.dumps(envelope, indent=2), encoding="utf-8")
+        except (OSError, TypeError, ValueError) as exc:
+            # Best-effort: a paid `ok` run must still return a RunResult (and thus yield a
+            # ledger row) even if this forensic sidecar can't be written — losing a
+            # transcript is far cheaper than crashing the sweep and re-paying on resume.
+            logger.warning("transcript write failed for %s (recording None): %s", run_id, exc)
+            return None
         return str(path)
 
     def _failure(

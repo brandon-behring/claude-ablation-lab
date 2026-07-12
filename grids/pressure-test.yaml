@@ -4,8 +4,14 @@
 #
 # n = 5 epochs: the config-mean quantum drops to ~0.013 (1/(items*5))-scale, under the
 # 0.02 advise margin — fixing t5's flimsy n = 3 (~0.022, right at the margin).
-# 3 models x 3 efforts x 1 variant x 5 epochs = 45 cells per task.
+# Haiku 4.5 has no effort parameter (CV2), so the capability matrix collapses it to one
+# canonical cell: sonnet/opus x {low,high,max} + haiku x {low} = 7 configs x 5 epochs =
+# 35 cells per task. (The committed pressure-test ledger is local-only and predates the
+# matrix; its 45-cell run stays valid as history.)
 models: [haiku, sonnet, opus]
 efforts: [low, high, max]
 variants: [none]
 epochs: 5
+
+effort_support:
+  haiku: [low]

@@ -12,13 +12,13 @@ The lab's instruments are, on the whole, **well-aligned with the published state
 2. **Two judge-aggregation choices.** The equal-weight cross-judge mean is *contradicted* by reliability-weighted aggregation; the tie-on-cross-vendor-disagreement rule has *no published precedent* (a defensible house convention, but label it one).
 3. **A contamination blind spot.** The lab never screens its public-source probes (t8 math, t1 parquet) for train-test contamination; clustered top scores could be memorization, not a real capability ceiling.
 
-One instrument defect — the human spot-check gate — was found *and fixed* during this audit (see §4). Nothing here overturns the lab's economics conclusions.
+One instrument defect — the human spot-check gate's *arithmetic and sampler* — was found *and fixed* during this audit (see §4); the gate itself is regenerated but **not yet run** — its 10 human verdicts remain unfilled, so the Fable separation stays **provisional**. Nothing here overturns the lab's economics conclusions.
 
 ---
 
 ## 1. Context & method
 
-The 2026-07-06 audit noted every committed result saturates at the top and no checkable task separates sonnet from opus; the LLM-judge phase (the lab's first REAL positive separation: fable > sonnet on t9 authoring) is its newest instrument and cited no literature. This audit maps ~18 load-bearing house choices to the literature with an **aligned / contradicted / no-guidance** verdict each, shows the arithmetic for every numeric gate, and proposes issues for what is actually broken.
+The 2026-07-06 audit noted every committed result saturates at the top and no checkable task separates sonnet from opus; the LLM-judge phase (the lab's first *provisional* positive separation — fable > sonnet on t9 authoring in a **pilot**, still gated: the human spot-check verdicts are unfilled, so it is not yet a validated headline) is its newest instrument and cited no literature. This audit maps ~18 load-bearing house choices to the literature with an **aligned / contradicted / no-guidance** verdict each, shows the arithmetic for every numeric gate, and proposes issues for what is actually broken.
 
 Sources live in three strict-live research dossiers maintained locally — `research_llm_judge_validity`, `research_eval_statistics`, `research_eval_tooling_landscape` (24 + 24 + 11 primary sources) — plus a refreshed `research_eval_drift`. Citations in this doc are self-contained (this repo is public; the dossiers are local).
 
@@ -68,7 +68,7 @@ Legend: **A** aligned · **C** contradicted · **NG** no-guidance · **✔fixed*
 
 Computed with the lab's own `analyze._sign_flip_p`; reproduces the pilot exactly.
 
-**Sign-flip validated against the live judge ledger:** fable/high 9/1/0 → p=0.0039; fable/low 9/0/1 → p=0.0039 (Holm→0.0078); opus/high 5/3/2 → p=0.4219. All match the pilot.
+**Sign-flip reproduced against the live judge ledger (pilot; human spot-check gate unfilled → provisional, not a validated headline):** fable/high 9/1/0 → p=0.0039; fable/low 9/0/1 → p=0.0039 (Holm→0.0078); opus/high 5/3/2 → p=0.4219. All match the pilot.
 
 **S1 — the MIN_PAIRS_FOR_REAL=6 floor is exactly right.** Min two-sided p = 2/2ⁿ, so `real` (p≤0.05) is *unreachable* at n≤5 (n=5 → 0.0625); n=6 needs a perfect 6/6 sweep (p=0.031); n=10 needs ≥9/10 same-sign (p=0.021).
 

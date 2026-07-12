@@ -79,6 +79,25 @@ def test_reset_clean_restores_pristine(tmp_path: Path) -> None:
     assert (wt.path / "CLAUDE.md").read_text() == "# variant config\n"  # tracked restored
 
 
+def test_reset_clean_removes_nested_git_repo(tmp_path: Path) -> None:
+    # An agentic Bash cell can `git init`/`clone` (or vendor a tree via pip/npm/uv)
+    # inside the worktree; a single `git clean -f` refuses to recurse into a nested repo
+    # and would leak it into the next cell. `-ffdx` (the B10 fix) removes it.
+    repo = tmp_path / "infra"
+    _init_repo(repo)
+    wt = ensure_worktree(repo, "HEAD", base=tmp_path / ".worktrees")
+
+    nested = wt.path / "scratch_repo"
+    nested.mkdir()
+    subprocess.run(["git", "-C", str(nested), "init"], check=True, capture_output=True)
+    (nested / "artifact.txt").write_text("cell-1 vendored tree\n")
+    assert (nested / ".git").exists()  # a real nested repo now sits in the worktree
+
+    reset_clean(wt)
+
+    assert not nested.exists()  # -ffdx removed the nested repo (a single -f would not)
+
+
 def test_reset_clean_refuses_primary_checkout(tmp_path: Path) -> None:
     # A primary checkout's .git is a directory → guardrail must refuse it.
     repo = tmp_path / "infra"
