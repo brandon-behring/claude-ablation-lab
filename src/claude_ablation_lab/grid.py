@@ -1,15 +1,20 @@
 """Grid spec + cell expansion.
 
 A *grid* is the sweep's cartesian axes — models × efforts × variants × epochs —
-plus an ``effort_support`` validity matrix (e.g. ``max`` effort is Opus-only). A
-*cell* is one concrete point ``(task, model, effort, variant, epoch)`` the
-orchestrator will run.
+plus an ``effort_support`` budget narrowing (e.g. ``max`` effort is Opus-only) on top
+of a fixed **provider capability matrix**. A *cell* is one concrete point
+``(task, model, effort, variant, epoch)`` the orchestrator will run.
 
-Expansion is pure (only reads YAML): it drops two kinds of invalid combination,
+Expansion is pure (only reads YAML): it drops three kinds of invalid combination,
 logging each so a silently-missing cell never masquerades as a covered one:
 
-1. **effort not supported by a model** (``effort_support``).
-2. **task / variant incompatibility** — an infra-agnostic task (``infra_repo:
+1. **effort inert for a model** (provider capability, ``_EFFORT_CAPABILITY``) — a model
+   with no effort parameter (e.g. Haiku 4.5) has every effort resolve to one default
+   config, so all but a single canonical cell are dropped with a *warning* (the rest
+   would be redundant, provider-identical paid cells — a "config" that isn't one).
+2. **effort not in a grid's ``effort_support``** — a per-grid budget narrowing on top
+   of the provider floor (an unlisted model supports every effort).
+3. **task / variant incompatibility** — an infra-agnostic task (``infra_repo:
    null``, e.g. T1/T3) is meaningful only under the ``none`` variant (a neutral
    cwd); an infra-sensitive task (``infra_repo`` set, e.g. T2) needs its project
    config and so runs only under a real ``repo@ref`` worktree variant. Crossing
@@ -32,6 +37,7 @@ __all__ = [
     "NONE_VARIANT",
     "load_grid",
     "expand_grid",
+    "model_effort_inert",
     "parse_variant",
 ]
 
@@ -39,6 +45,32 @@ logger = logging.getLogger(__name__)
 
 #: Sentinel variant: run in a neutral cwd with no worktree (infra-agnostic tasks).
 NONE_VARIANT = "none"
+
+#: Provider effort-capability matrix: does the CLI expose an effort/thinking lever for a
+#: model family (matched as a case-insensitive substring of the alias)? A family not
+#: listed is assumed effort-capable. **Haiku 4.5 has no effort parameter** (documented:
+#: absent from every effort-support list; it uses ``budget_tokens``, not adaptive-thinking
+#: effort), so all its effort values resolve to one default config — the grid keeps a
+#: single canonical cell rather than running redundant, provider-identical paid cells (a
+#: "config" that isn't one). Acceptance of an effort value by the CLI is *not* application
+#: of it, so only families documented to have no effort lever belong here.
+_EFFORT_CAPABILITY: dict[str, bool] = {
+    "haiku": False,
+    "sonnet": True,
+    "opus": True,
+    "fable": True,
+}
+
+
+def model_effort_inert(model: str) -> bool:
+    """True iff the provider exposes no effort lever for ``model`` (e.g. Haiku 4.5)."""
+    import re
+
+    lowered = model.lower()
+    for family, capable in _EFFORT_CAPABILITY.items():
+        if re.search(rf"\b{re.escape(family)}\b", lowered):
+            return not capable
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,8 +96,10 @@ class Grid:
     epochs:
         Repeats per cell (the run-variance axis; not a within-cell CI). ``>= 1``.
     effort_support:
-        ``model -> [allowed efforts]``. A model absent from the map supports every
-        effort in ``efforts`` (no restriction).
+        ``model -> [allowed efforts]``, a per-grid budget narrowing *on top of* the
+        provider capability floor (:func:`model_effort_inert`). A model absent from the
+        map supports every effort in ``efforts`` (no per-grid restriction); an
+        effort-inert model is collapsed to one :meth:`canonical_effort` regardless.
     """
 
     models: tuple[str, ...]
@@ -74,8 +108,34 @@ class Grid:
     epochs: int
     effort_support: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
+    def canonical_effort(self, model: str) -> str | None:
+        """The single effort this grid runs for an effort-inert ``model``, or ``None``.
+
+        All efforts resolve to one config, so one representative cell is kept: the first
+        listed effort permitted by ``effort_support`` (honouring an author's narrowing).
+        Returns ``None`` when the grid's ``effort_support`` explicitly permits *none* of the
+        listed efforts — the model is then dropped entirely, never silently run at an effort
+        the author excluded (matching how a capable model with no permitted effort is
+        dropped). An unlisted model (no ``effort_support`` entry) keeps the first effort.
+        """
+        allowed = self.effort_support.get(model)
+        for effort in self.efforts:
+            if allowed is None or effort in allowed:
+                return effort
+        return None  # a non-None support set disjoint from `efforts` → no canonical cell
+
     def effort_ok(self, model: str, effort: str) -> bool:
-        """True iff ``model`` supports ``effort`` (unlisted model → all efforts)."""
+        """True iff this grid should run ``(model, effort)``.
+
+        Two layers, AND-composed: (1) a **provider capability floor** — an effort-inert
+        model (:func:`model_effort_inert`, e.g. Haiku 4.5, which has no effort parameter)
+        is valid only for the single :meth:`canonical_effort` (and is dropped entirely when
+        that is ``None``); and (2) the per-grid ``effort_support`` budget narrowing (a model
+        unlisted there supports every effort).
+        """
+        if model_effort_inert(model):
+            canonical = self.canonical_effort(model)
+            return canonical is not None and effort == canonical
         allowed = self.effort_support.get(model)
         return True if allowed is None else effort in allowed
 
@@ -163,7 +223,30 @@ def expand_grid(grid: Grid, tasks: list[Task]) -> list[Cell]:
             for model in grid.models:
                 for effort in grid.efforts:
                     if not grid.effort_ok(model, effort):
-                        logger.info("drop %s: effort %r unsupported", model, effort)
+                        if model_effort_inert(model):
+                            canonical = grid.canonical_effort(model)
+                            if canonical is None:
+                                logger.warning(
+                                    "drop %s/%s: %s has no effort parameter and this grid's "
+                                    "effort_support permits none of its efforts — no cell kept",
+                                    model,
+                                    effort,
+                                    model,
+                                )
+                            else:
+                                logger.warning(
+                                    "drop %s/%s: %s has no effort parameter — every effort "
+                                    "resolves to one config; kept the single canonical cell %s/%s",
+                                    model,
+                                    effort,
+                                    model,
+                                    model,
+                                    canonical,
+                                )
+                        else:
+                            logger.info(
+                                "drop %s/%s: effort not in grid effort_support", model, effort
+                            )
                         continue
                     for epoch in range(grid.epochs):
                         cells.append(Cell(task.id, model, effort, variant, epoch))

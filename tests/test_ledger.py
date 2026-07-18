@@ -102,6 +102,45 @@ def test_tool_calls_none_vs_empty_dict_round_trip_distinctly(tmp_path) -> None:
 
 
 @pytest.mark.unit
+def test_append_row_coerces_nonserialisable_value_instead_of_raising(tmp_path) -> None:
+    # B3: a grader that stashes a non-JSON value in `details` must not crash the paid-row
+    # append (a lost row re-pays the cell on resume). The value is coerced to str (logged),
+    # the row still lands, and load_rows round-trips it.
+    path = tmp_path / "l.jsonl"
+    append_row(path, _row(details={"weird": {1, 2, 3}}))  # a set is not JSON-serialisable
+    loaded = load_rows(path)
+    assert len(loaded) == 1  # the paid row survived
+    assert "weird" in loaded[0].details  # the odd value was coerced, not dropped
+
+
+@pytest.mark.unit
+def test_append_row_writes_degraded_row_when_serialisation_is_impossible(tmp_path) -> None:
+    # B3 (adversarial review, findings 2+3): the paid row must land even when `default=`
+    # can't help — a non-deep-copyable value (asdict raises before json is reached) or a
+    # non-str dict key (json raises during key sort). Degrade to a placeholder, don't drop.
+    path = tmp_path / "l.jsonl"
+    gen = (i for i in (1, 2))  # a generator is not deep-copyable → asdict raises
+    append_row(path, _row(run_id="nodeepcopy", details={"gen": gen}))
+    append_row(path, _row(run_id="badkeys", details={"ok": 1, 2: "mixed"}))  # json key-sort fails
+    loaded = load_rows(path)
+    assert [r.run_id for r in loaded] == ["nodeepcopy", "badkeys"]  # both paid rows landed
+    assert all("_unserialisable" in r.details for r in loaded)  # degraded, logged, not lost
+
+
+@pytest.mark.unit
+def test_append_row_degrades_on_self_referential_details(tmp_path) -> None:
+    # B3 (2nd review round): a self-referential details makes asdict() recurse to RecursionError
+    # BEFORE json — an arbitrary grader object can raise an arbitrary error, so the paid row must
+    # still land (degraded), not crash into a re-pay. Guards the broadened `except Exception`.
+    path = tmp_path / "l.jsonl"
+    cyclic: dict[str, object] = {}
+    cyclic["self"] = cyclic
+    append_row(path, _row(run_id="cyclic", details=cyclic))
+    loaded = load_rows(path)
+    assert len(loaded) == 1 and "_unserialisable" in loaded[0].details
+
+
+@pytest.mark.unit
 def test_append_is_additive(tmp_path) -> None:
     path = tmp_path / "ledger.jsonl"
     append_row(path, _row(run_id="a"))

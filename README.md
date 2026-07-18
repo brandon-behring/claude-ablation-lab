@@ -6,7 +6,7 @@
 
 A personal **model × thinking-effort × config** ablation/regression harness for **Claude Code**, run headless against *your own* use cases.
 
-The mission is **model/effort selection economics**: measure — on *your* tasks, inside *your* infrastructure — which model × thinking-effort configs sit on the quality-vs-cost **Pareto frontier**, where the expensive reflex (opus/max) overpays, and where a cheaper config is provably safe. The goal is not to reproduce Anthropic's published base numbers. The same machinery also proves whether a change to your `CLAUDE.md` / skills / MCP / prompts **actually helps** ("is the difference real?") — that infra A/B capability exists to keep the economics measurement honest (hermetic cells, designed controls, exact verdicts). Inspired by the Anthropic talk *"Picking the right model"* (build a small private eval; optimize cheapest-per-*successful-outcome*; read your transcripts; separate infra failures from model failures); mission clarified by the [2026-07-06 independent audit](docs/audits/2026-07-06_independent-audit.md).
+The mission is **capability-worth on real work**: measure — on *your* tasks, inside *your* infrastructure — which model × thinking-effort config is worth it for which task across **quality, latency, efficiency (token/context burn), and context hygiene**, where the expensive reflex (opus/max) overpays, and where a cheaper config is provably safe. API-equivalent USD is kept only as *one comparability axis* — on a flat subscription dollars are not the constraint that binds (see the cost note below). The goal is not to reproduce Anthropic's published base numbers. The same machinery also proves whether a change to your `CLAUDE.md` / skills / MCP / prompts **actually helps** ("is the difference real?") — that infra A/B capability exists to keep the measurement honest (hermetic cells, designed controls, exact verdicts). Inspired by the Anthropic talk *"Picking the right model"* (build a small private eval; optimize per-*successful-outcome*; read your transcripts; separate infra failures from model failures); mission reframed by the [2026-07-11 big-picture audit](docs/audits/2026-07-11_big-picture-mission-and-roadmap.md), which also found the current evidence is **scoped to single-turn checkable tasks** — the agentic regime where the model/effort edge is expected is the lab's next build.
 
 ## How it works
 
@@ -37,13 +37,13 @@ Two dependencies are **public but not on PyPI**:
 ablation run tasks/ grids/smoke.yaml --task t3_verbatim_anchor --ledger results/smoke.jsonl
 ablation report results/smoke.jsonl
 
-# The focused v1 sweep (63 cells = 3 tasks × valid model×effort × 3 epochs):
+# The focused v1 sweep (54 cells = 3 tasks × valid model×effort × 3 epochs; haiku has no effort param → one cell):
 ablation run      tasks/ grids/v1.yaml --dry-run   # preview the expanded grid, no calls
 ablation estimate tasks/ grids/v1.yaml             # run ONE cell, project tokens/turns/cost
 ablation run      tasks/ grids/v1.yaml             # sequential, resumable → results/ledger.jsonl
 ablation report   results/ledger.jsonl             # mean±CI, cost, latency, Pareto, leakage flag
 ablation compare  results/ledger.jsonl --a repo@v1 --b repo@v2   # paired-bootstrap "is it real?"
-ablation advise   results/ledger.jsonl --reflex opus/max         # cheapest config within the quality margin — $ + latency saved
+ablation advise   results/ledger.jsonl --reflex opus/max         # non-inferior config within the quality margin — latency + token throughput saved ($ = comparability-only)
 ablation regrade  tasks/ --ledger results/ledger.jsonl           # re-score stored runs, no calls
 ablation plot     results/ledger.jsonl --a repo@v1 --b repo@v2   # Pareto / effort / A-B forest figures
 ```
@@ -84,6 +84,18 @@ prompt *directs* Claude to consult that skill (this measures prompt-directed ski
 not autonomous skill discovery). All 6 matched (model, effort) pairs moved 0.0 → 1.0, so the
 exact sign-flip test returns its minimum reachable p at n=6, `2/2⁶ = 0.03125` — a `real=yes` the
 verdict machinery *earns* rather than assumes (the bootstrap CI is effect-size context only).
+
+**Honesty correction (CV2, 2026-07-11):** two of those six configs — `haiku/low` and `haiku/high` — are
+the *same* config, because Haiku 4.5 has no effort parameter. The honest count of independent configs is
+therefore **5**, where the sign-flip floor is `2/2⁵ = 0.0625` (not `< 0.05`). This committed 54-row run
+predates the provider capability matrix (`src/claude_ablation_lab/grid.py`); a re-run now collapses haiku
+to one cell, so reproducing an honest `real=yes` needs a genuine 6th config (e.g. a `medium` tier — the
+showcase grid carries that TODO). The effect (every config flips 0.0 → 1.0) stays a strong signal; the
+lab's *decisive* verdict just can't be certified at n=5. (Note: `ablation compare
+results/showcase.jsonl` still prints the **raw historical** `n=6` / `p=0.031` / `real=yes` off the
+committed ledger, which predates the matrix — a capability-aware recount that collapses the inert haiku
+pair to `n=5` is a follow-up.)
+
 Mechanism was verified from every cell's session transcript: **all 18 treatment cells invoked
 `Skill("project-reference")`**; the 18 control cells made **zero exec/filesystem/network calls** —
 10 called nothing at all, 8 searched the tool catalog for the skill (3 even attempted the
@@ -97,23 +109,29 @@ not discriminate models/efforts here; cost does (haiku/high is the quality-vs-co
 
 ![t3 pareto](docs/figures/t3_verbatim_anchor_pareto.png)
 
-**Where the reflex overpays** — that saturation makes the cost question sharp. `ablation advise
-results/showcase.jsonl` reads the committed ledger and names the cheapest config within `margin` of
-the **best** config, versus an `opus/max` reflex (absent from this low/high grid, so measured against
-`opus/high`) — this is the verbatim output:
+**Where the reflex overpays** — that saturation makes the *efficiency* question sharp. `ablation
+advise results/showcase.jsonl` (default **latency-led** since the 2026-07-11 re-denomination) reads
+the committed ledger and names the non-inferior config that saves the most wall-clock within `margin`
+of the **best**, versus an `opus/max` reflex (absent from this low/high grid, so measured against
+`opus/high`) — this is the output:
 
-| task (variant) | reflex → use | qual | save $/run | × |
-|---|---|---|---|---|
-| `t4_demo_infra` (with-skill) | opus/high → **haiku/high** | 1.000 | $0.114 | **14.6×** |
-| `t3_verbatim_anchor` (none) | opus/high → **haiku/high** | 1.000 | $0.057 | **11.1×** |
-| `t4_demo_infra` (without-skill) | — | 0.000 | *n/a* | — |
+| task (variant) | reflex → use | qual | Δlat/run | Δtok | $ (info) |
+|---|---|---|---|---|---|
+| `t3_verbatim_anchor` (none) | opus/high → **sonnet/low** | 1.000 | **6.0 s** | — | $0.025 |
+| `t4_demo_infra` (with-skill) | opus/high → **haiku/high** | 1.000 | **3.5 s** | — | $0.114 |
+| `t4_demo_infra` (without-skill) | — | 0.000 | *n/a* | — | — |
 
-**Σ per-run overpay: $0.1704** — reaching for Opus on these extraction-shaped tasks buys **nothing**.
-The without-skill control scores 0.000 at every config, so `advise` flags it `n/a` (best ≤ margin)
-and keeps it out of the total rather than banking a meaningless "saving." Honest scope: the two real
-rows are *saturated* tasks where every config already scores 1.000, so this shows the method and the
-overpay on *easy* work — **not** that Opus is wasteful on hard work with a real quality gradient. That
-needs a task that discriminates, which is why the suite is growing one.
+**Σ per-run latency saved: 9.5 s** — on a flat subscription the reflex's extra spend buys **no
+quality** on these saturated tasks, only wall-clock. Note the axis flip the re-denomination exposes:
+on **latency**, `t3`'s pick is **sonnet/low**, not the cheapest-$ `haiku/high` — haiku's low API
+price costs real wall-clock (and, on token-era ledgers, more total throughput). USD is shown as an
+info column only (`$` = API-equivalent; a flat plan bills none of it). The without-skill control
+scores 0.000 at every config, so `advise` flags it `n/a` (best ≤ margin) and keeps it out of the
+total rather than banking a meaningless "saving." Honest scope: the two real rows are *saturated
+single-turn* tasks where every config already scores 1.000, so this shows the method and the overpay
+on *easy* work — **not** that Opus is wasteful on hard or agentic work with a real quality gradient.
+(`Δtok` is blank because the 2026-07-02 showcase ledger predates token persistence; run `ablation
+advise --x-axis throughput` on a post-2026-07-06 ledger for the token frontier.)
 
 **Run the same experiment yourself** (fresh clone, ~$3 equivalent / ~15–35 min wall-clock):
 
@@ -131,7 +149,7 @@ same pre-registered verdict semantics apply.
 ## Beyond saturation — the discriminating pilot (`books-validate`)
 
 The showcase tasks are **saturated** (every config scores ~1.0), so they prove the method and the
-overpay-on-*easy*-work finding, but not whether the opus/max reflex earns its keep on *hard* work.
+overpay-on-*easy* (single-turn, saturated) work finding, but not whether the opus/max reflex earns its keep on *hard* or *agentic* work.
 [`examples/books-validate/`](examples/books-validate/README.md) is the first task built to
 **discriminate**: fix a seeded-broken MDX chapter against editorial conventions, on a ladder from
 mechanical fixes through semantic cross-reference resolution to a required citation addition. It
@@ -139,14 +157,17 @@ ships in two shapes — `t5_books_validate` (single-turn) and `t6_books_validate
 worktree) — with an anti-gaming checklist grader (verified gradient: `empty → 0.0`, `do-nothing →
 0.5`, `pass-the-validator-only → 0.77`, `full understanding → 1.0`) and a blind-solve fairness pass.
 **Result (t5 run, 2026-07-03, 27/27 cells):** the task discriminates (haiku ~0.10 below the field —
-genuinely not saturated), but the opus/max reflex **does not earn its keep** — opus/max (0.978) ties
-`sonnet/high` (0.978) to four decimals while costing **3.6× more** and running **~200s slower** per
-run, so `ablation advise --reflex opus/max` recommends `sonnet/high`. `max` effort was waste on every
-model. The one untested row of the spend-audit decision rule ("opus earns it on open-ended authoring")
-is thus tested and falsified. Reproduce:
+genuinely not saturated), but on this **single-turn constrained MDX-repair** task the opus/max reflex
+**does not earn its keep** — opus/max (0.978) ties `sonnet/high` (0.978) to four decimals while costing
+**3.6× more** and running **~200s slower** per run, so `ablation advise --reflex opus/max` recommends
+`sonnet/high`. Higher `max` effort added no measurable quality on any effort-capable model *here*.
+Honest scope: `t5` is **constrained repair of a seeded-broken MDX chapter against a 15-item validator —
+not open-ended authoring**, so this **narrows (does not close)** the spend-audit's "opus earns it on
+hard authoring" row; open-ended, multi-turn authoring stays **untested** (the provisional LLM-judge
+phase is its first probe), and "no edge" here is *not detected at this power*, not *absent*. Reproduce:
 
 ```bash
-ablation run tasks/ grids/books-pilot.yaml --task t5_books_validate --dry-run   # 27-cell preview
+ablation run tasks/ grids/books-pilot.yaml --task t5_books_validate --dry-run   # 21-cell preview (haiku collapses)
 ablation run tasks/ grids/books-pilot.yaml --task t5_books_validate \
   --ledger results/books-pilot.jsonl                                            # the quota run
 ablation advise results/books-pilot.jsonl --reflex opus/max                     # the verdict
@@ -181,9 +202,12 @@ those axes haiku's "cheapness" is a pricing illusion: it burned ~6× the tokens 
 (~10× of `claude-fable-5/low`) and 3–4× the
 wall-clock of `sonnet/low` for the same (saturated) quality, and its only quality slip in the whole
 sweep was `haiku/low` wandering off-task on one epoch (0.667, flagged `⚠1unp`). Two more notes:
-effort helped at the tier floor (`haiku/low → high` = 0.667 → 1.000) while at the top it only added
-cost (`fable/max` = 2.2× `fable/low` for +0.000 quality), and Fable 5 at **low** effort was the most
-token-efficient config in the sweep — consistent with Anthropic's claim that lower effort on the
+**Haiku 4.5 has no effort parameter** (documented), so the apparent `haiku/low → high` = 0.667 → 1.000
+"effort" jump is **noise between two identical default configs** at n=3 (that one off-task epoch), *not*
+an effort gradient — the release grid now drops haiku effort variation (the committed 39-row ledger
+predates this capability matrix). At the top, effort only added cost (`fable/max` = 2.2× `fable/low` for
++0.000 quality), and Fable 5 at **low** effort was the most token-efficient config in the sweep —
+consistent with Anthropic's claim that lower effort on the
 Claude 5 family rivals prior models. t8 stays saturated for sonnet/opus/fable, so this grid tracks
 the *cost* axes across releases; the quality question lives with the discriminating tasks. The
 sanitized run ledger is **committed** —

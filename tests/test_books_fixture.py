@@ -133,8 +133,11 @@ def test_grid_routes_t5_neutral_and_t6_to_the_worktree() -> None:
     assert {c.variant for c in cells if c.task_id == "t6_books_validate_agent"} == {
         ".books-validate@v1"
     }
-    # max effort IS present (the reflex under test is opus/max), 9 configs × 3 epochs.
-    assert len([c for c in cells if c.task_id == "t5_books_validate"]) == 27
+    # max effort IS present (the reflex under test is opus/max). Haiku has no effort
+    # parameter (CV2), so it collapses to 1 canonical cell; sonnet+opus keep {low,high,max}.
+    # 7 configs × 3 epochs = 21 (not the naive 3×3×3 = 27; the committed pilot ledger
+    # predates the capability matrix and its 27-cell run stays valid as history).
+    assert len([c for c in cells if c.task_id == "t5_books_validate"]) == 21
     assert {c.effort for c in cells} == {"low", "high", "max"}
 
 

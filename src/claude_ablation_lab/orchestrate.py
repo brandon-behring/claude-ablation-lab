@@ -578,11 +578,22 @@ def run_sweep(
                 break
 
             output, artifact_missing = _capture_output(prep, run_result, cwd, since=since)
-            output_path = (
-                _persist_output(out_dir, run_result.run_id, output)
-                if run_result.status == "ok"
-                else None
-            )
+            output_path: str | None = None
+            if run_result.status == "ok":
+                try:
+                    output_path = _persist_output(out_dir, run_result.run_id, output)
+                except (OSError, ValueError) as exc:
+                    # Best-effort: a sidecar write failure must not crash the sweep before
+                    # the ledger row lands (a missing row re-pays this cell on resume). Catch
+                    # ValueError too — write_text raises UnicodeEncodeError (a ValueError) on
+                    # a lone surrogate in the model output, which a bare OSError would miss. A
+                    # None sidecar only forfeits offline re-grade of this one cell on a future
+                    # grader-version bump — far cheaper than a double-pay.
+                    logger.warning(
+                        "output sidecar write failed for %s (recording None): %s",
+                        run_result.run_id,
+                        exc,
+                    )
             score = _grade(grader, run_result.status, output, prep.gold)
             row = _build_row(
                 cell,
@@ -809,9 +820,10 @@ def estimate_sweep(
             _cleanup(worktrees, neutral_dir if owns_neutral else None)
 
     n = len(cells)
-    usage = run_result.usage or {}
-    in_tok = int(usage.get("input_tokens", 0) or 0)
-    out_tok = int(usage.get("output_tokens", 0) or 0)
+    # Route through the hardened helper (matches the ledger path): a NaN/inf/bad-string
+    # token field would otherwise raise mid-estimate on int(...); not-measured → 0 (a floor).
+    in_tok = _usage_token(run_result.usage, "input_tokens") or 0
+    out_tok = _usage_token(run_result.usage, "output_tokens") or 0
     return Estimate(
         n_cells=n,
         calibration_label=_cell_label(cell),

@@ -130,8 +130,11 @@ def ensure_worktree(repo: Path, ref: str, *, base: Path = DEFAULT_BASE) -> Workt
 def reset_clean(worktree: Worktree) -> None:
     """Restore the worktree to a pristine checkout of its sha (call before each cell).
 
-    `git reset --hard <sha>` + `git clean -fdx` discards all tracked changes and
+    `git reset --hard <sha>` + `git clean -ffdx` discards all tracked changes and
     untracked/ignored files so an agentic task's writes never leak into the next cell.
+    The double-force (`-ff`) is required so a *nested* git repo an agentic cell may have
+    created (e.g. a `git init`/`clone`, or a vendored tree from pip/npm/uv/cargo) is
+    removed too — a single `-f` refuses to recurse into one and would leak it forward.
 
     Safety guardrail: refuses any path that is not a *linked* worktree (a primary
     checkout's ``.git`` is a directory, not a file) — structurally prevents this
@@ -143,7 +146,7 @@ def reset_clean(worktree: Worktree) -> None:
             "(.git is not a file) — would risk a real checkout"
         )
     _git(worktree.path, "reset", "--hard", worktree.sha)
-    _git(worktree.path, "clean", "-fdx")
+    _git(worktree.path, "clean", "-ffdx")
 
 
 def remove_worktree(worktree: Worktree) -> None:

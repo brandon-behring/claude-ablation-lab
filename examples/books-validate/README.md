@@ -1,10 +1,10 @@
-# books-validate — a *discriminating* authoring benchmark
+# books-validate — a *discriminating* constrained-MDX-repair benchmark
 
 Where `t3`/`t4` are **saturated** (every config scores ~1.0, proving the harness plumbing), this
 fixture is built to **discriminate**: fix a seeded-broken MDX chapter so it satisfies book-scaffold
 editorial conventions, on a difficulty ladder that a stronger model should climb further. It exists
 to answer the question the [spend audit](../../docs/design/2026-07-03_spend-audit.md) left open —
-does the opus/max reflex actually earn its keep on *hard* authoring work, or does the cheaper config
+does the opus/max reflex actually earn its keep on *hard constrained-repair* work (not open-ended authoring), or does the cheaper config
 tie it here too?
 
 ## Two task shapes, one fixture

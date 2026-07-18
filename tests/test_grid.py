@@ -10,6 +10,7 @@ from claude_ablation_lab.grid import (
     Grid,
     expand_grid,
     load_grid,
+    model_effort_inert,
     parse_variant,
 )
 from claude_ablation_lab.task import Task
@@ -35,11 +36,63 @@ def test_parse_variant_malformed_raises() -> None:
 
 
 @pytest.mark.unit
-def test_effort_ok_unlisted_model_allows_all() -> None:
-    grid = Grid(("haiku",), ("low", "high"), ("none",), 1, {"opus": ("low", "high", "max")})
-    assert grid.effort_ok("haiku", "max")  # unlisted → unrestricted
+def test_effort_ok_unlisted_capable_model_allows_all() -> None:
+    # An effort-CAPABLE model absent from effort_support supports every effort.
+    grid = Grid(("sonnet",), ("low", "high", "max"), ("none",), 1, {"opus": ("low", "high", "max")})
+    assert grid.effort_ok("sonnet", "max")  # unlisted capable → unrestricted
     assert grid.effort_ok("opus", "max")
     assert not grid.effort_ok("opus", "weird")
+
+
+@pytest.mark.unit
+def test_model_effort_inert_matrix() -> None:
+    # Haiku 4.5 has no effort parameter (CV2); the other families do; unknown → capable.
+    assert model_effort_inert("haiku")
+    assert model_effort_inert("claude-haiku-4-5")
+    assert not model_effort_inert("sonnet")
+    assert not model_effort_inert("opus")
+    assert not model_effort_inert("claude-fable-5")
+    assert not model_effort_inert("some-future-model")  # unknown → assumed effort-capable
+
+
+@pytest.mark.unit
+def test_effort_inert_model_collapses_to_one_canonical_cell() -> None:
+    # An effort-inert model (Haiku) is valid only for the single canonical effort — its
+    # other efforts are provider-identical duplicates, dropped at expansion (CV2).
+    grid = Grid(("haiku", "opus"), ("low", "high", "max"), ("none",), 2)
+    assert grid.canonical_effort("haiku") == "low"  # first listed
+    assert grid.effort_ok("haiku", "low")  # canonical — kept
+    assert not grid.effort_ok("haiku", "high")  # inert duplicate — dropped
+    assert not grid.effort_ok("haiku", "max")  # inert duplicate — dropped
+    cells = expand_grid(grid, [_task("t", infra_repo=None)])
+    haiku = {(c.model, c.effort) for c in cells if c.model == "haiku"}
+    assert haiku == {("haiku", "low")}  # one config, not three
+    assert sum(c.model == "haiku" for c in cells) == 2  # 1 config × 2 epochs
+    assert sum(c.model == "opus" for c in cells) == 6  # 3 efforts × 2 epochs (capable)
+
+
+@pytest.mark.unit
+def test_canonical_effort_honours_effort_support_narrowing() -> None:
+    # If a grid narrows the inert model via effort_support, the canonical cell is the
+    # first listed effort that support permits (author intent respected).
+    grid = Grid(("haiku",), ("low", "high"), ("none",), 1, {"haiku": ("high",)})
+    assert grid.canonical_effort("haiku") == "high"
+    assert grid.effort_ok("haiku", "high")
+    assert not grid.effort_ok("haiku", "low")
+
+
+@pytest.mark.unit
+def test_effort_inert_model_with_no_permitted_effort_is_dropped() -> None:
+    # If a grid's effort_support permits NONE of the listed efforts for an inert model, it
+    # is dropped ENTIRELY (never silently run at an effort the author excluded) — matching
+    # how a capable model with no permitted effort is dropped.
+    grid = Grid(("haiku", "opus"), ("low", "high"), ("none",), 1, {"haiku": ("max",)})
+    assert grid.canonical_effort("haiku") is None
+    assert not grid.effort_ok("haiku", "low")
+    assert not grid.effort_ok("haiku", "high")
+    cells = expand_grid(grid, [_task("t", infra_repo=None)])
+    assert not any(c.model == "haiku" for c in cells)  # dropped, not silently run at low
+    assert any(c.model == "opus" for c in cells)  # capable model unaffected
 
 
 @pytest.mark.unit

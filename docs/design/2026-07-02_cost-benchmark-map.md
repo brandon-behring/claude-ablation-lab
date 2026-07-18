@@ -7,15 +7,15 @@ blind-solve fairness pass (two ambiguous items caught + fixed). **The t5 quota r
 settled the question: the task discriminates — haiku sits ~0.10 below the field, so it is genuinely
 not saturated — but the opus/max reflex does NOT earn its keep. opus/max (0.978) ties sonnet/high
 (0.978) to four decimals while costing 3.6× more and running ~200s slower per run; `advise` → use
-sonnet/high. Max effort was waste on every model (sonnet/max == sonnet/high, opus/max == opus/low,
-haiku/max is haiku's worst tier).** (t6 stays sandbox-gated — not run.) Full rationale in
+sonnet/high. Higher `max` effort added no gain on the effort-capable models (sonnet/max == sonnet/high,
+opus/max == opus/low); Haiku has no effort parameter, so its low/high/max spread is n=3 noise.** (t6 stays sandbox-gated — not run.) Full rationale in
 `docs/METHODOLOGY.md` (Discriminating tasks) and `docs/design/2026-07-03_spend-audit.md`. Original
 design notes preserved below.
 
 **Status: design + grounding (2026-07-02).** Phase 1 (`ablation advise`) shipped the cost verdict and,
-on the committed showcase ledger, a real finding: **opus→haiku is 11–15× cheaper for +0.000 quality**
-on `t3`/`t4`. But those tasks are *saturated* — every config already scores 1.000 — so they prove the
-overpay on **easy** work only. Whether the Opus/max reflex is wasteful on **hard** work (where a real
+on the committed showcase ledger, a real finding: **opus→haiku is 11–15× cheaper by API-equivalent
+proxy for +0.000 quality** on `t3`/`t4`. But those tasks are *saturated single-turn* probes — every
+config already scores 1.000 — so they prove the overpay on **easy** work only. Whether the Opus/max reflex is wasteful on **hard** work (where a real
 quality gradient exists) needs a task that **discriminates** configs. This doc maps the candidates and
 records what grounding settled, so the build is a decision, not a discovery.
 
@@ -28,13 +28,13 @@ margin." We just have no such task yet. The map's job: add one, cheaply, and fee
 
 | # | Real work | Task shape | Grader | Separates? | Build cost | Notes |
 |---|---|---|---|---|---|---|
-| **1** | **Book authoring** | fix seeded MDX convention violations until a validator passes | exit-code=error-count (`books_validate`, new) | *plausible* — id-matching against `labels.json`/`references.json` has a difficulty gradient | LOW (single-turn) / MED (agentic) | **the pilot** — see below |
+| **1** | **Constrained MDX repair** | fix seeded MDX convention violations until a validator passes | exit-code=error-count (`books_validate`, new) | *plausible* — id-matching against `labels.json`/`references.json` has a difficulty gradient | LOW (single-turn) / MED (agentic) | **the pilot** — see below |
 | 2 | Engineering | make a seeded-broken test green (`book-scaffold tests/*.test.mjs` or a pytest holdout) | exit-code / TAP-parse | *plausible-high* — classic SWE gradient | MED | reuses the same exit-code grader as #1 → the consolidation trigger |
 | 3 | Editorial verification | classify which claims need a `<Tag kind="official">` source URL | existing `classification` | depends on label difficulty | LOW | cheapest; single-turn, no new grader |
 
 Separability was honestly **unknown** for every row until a quota run — that was the whole point of building one.
 **Row 1 has now run (t5):** it *does* separate (haiku ~0.10 below the field), confirming the instrument measures
-real quality on hard authoring — but the separation is *haiku-vs-the-rest*, not *opus-above-sonnet*: sonnet/high,
+real quality on constrained MDX repair — but the separation is *haiku-vs-the-rest*, not *opus-above-sonnet*: sonnet/high,
 sonnet/max, opus/low and opus/max all tie at 0.978. Rows 2–3 remain unrun.
 
 ## Grounding that settled the pilot design

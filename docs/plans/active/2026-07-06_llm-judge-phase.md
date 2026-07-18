@@ -1,7 +1,10 @@
 # LLM-judge phase — pairwise preference for open-ended work
 
-> Status: **planned** (2026-07-06, scheduled by the independent audit —
-> `docs/audits/2026-07-06_independent-audit.md`). Not yet implemented.
+> Status: **piloted, not yet validated** (planned 2026-07-06 by the independent audit —
+> `docs/audits/2026-07-06_independent-audit.md`; implemented + pilot-run on the **PR #18** branch).
+> The judge code + `t9` + grids live on `feat/llm-judge-phase` (unmerged); all judge ledgers are
+> local-only. The pilot shows fable > sonnet on t9 authoring, but the **human spot-check gate**
+> (`results/judge_spotcheck.md`) is **unfilled**, so the result is **provisional, not a headline**.
 
 ## Why this phase exists
 

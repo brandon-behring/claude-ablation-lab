@@ -244,9 +244,9 @@ def report(
         str,
         typer.Option(
             "--x-axis",
-            help="Pareto cost axis for the ★ flag: cost ($) / latency (s) / tokens (output tokens)",
+            help="Pareto axis for the ★ flag: latency (s) / throughput (total tokens) / cost ($) / tokens (output)",
         ),
-    ] = "cost",
+    ] = "latency",
 ) -> None:
     """DuckDB aggregates per task×model×effort: score±CI, cost, latency, Pareto."""
     from claude_ablation_lab.analyze import X_AXES
@@ -292,8 +292,15 @@ def advise(
             help="Quality tolerance on [0,1] within which a cheaper config still counts as safe",
         ),
     ] = 0.02,
+    x_axis: Annotated[
+        str,
+        typer.Option(
+            "--x-axis",
+            help="Rank/optimize on: latency (s, default) / throughput (total tokens) / cost ($)",
+        ),
+    ] = "latency",
 ) -> None:
-    """Where the reflex config overpays: cheapest non-inferior config + $ and seconds saved."""
+    """Where the reflex overpays: the non-inferior config that saves the most latency / throughput."""
     from claude_ablation_lab.analyze import cost_advisor
     from claude_ablation_lab.analyze import report as run_report
 
@@ -302,11 +309,11 @@ def advise(
         console.print(f"[yellow]no graded rows in {ledger}[/yellow]")
         return
     try:
-        advice = cost_advisor(cells, reflex=reflex, margin=margin)
+        advice = cost_advisor(cells, reflex=reflex, margin=margin, x_axis=x_axis)
     except ValueError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2) from None
-    _print_advice(advice, reflex, margin)
+    _print_advice(advice, reflex, margin, x_axis)
 
 
 @app.command()
@@ -327,9 +334,9 @@ def plot(
         str,
         typer.Option(
             "--x-axis",
-            help="Pareto cost axis: cost ($) / latency (s) / tokens (output tokens)",
+            help="Pareto axis: latency (s) / throughput (total tokens) / cost ($) / tokens (output)",
         ),
-    ] = "cost",
+    ] = "latency",
 ) -> None:
     """Render Pareto / effort-curve / A→B-forest figures from a ledger (needs the ``plot`` extra)."""
     if fmt not in ("png", "svg", "pdf"):
@@ -429,23 +436,40 @@ def _with_interval(mean: float, lo: float | None, hi: float | None, places: int)
     return f"{base} [{_fmt(lo, places)},{_fmt(hi, places)}]"
 
 
-def _fmt_tokens(c) -> str:  # type: ignore[no-untyped-def]
-    """Mean output tokens with its epoch interval; mixed-era shows the denominator."""
-    if c.mean_output_tokens is None:
+def _fmt_tokens(c, x_axis: str = "latency") -> str:  # type: ignore[no-untyped-def]
+    """The report's token column: TOTAL tokens (input+output+cache) on the throughput axis,
+    else OUTPUT tokens — each with its epoch interval; partial coverage shows the denominator
+    so it is never read as fully measured."""
+    if x_axis == "throughput":
+        mean, lo, hi, cov = (
+            c.mean_total_tokens,
+            c.total_tokens_ci_low,
+            c.total_tokens_ci_high,
+            c.n_total_token_epochs,
+        )
+    else:
+        mean, lo, hi, cov = (
+            c.mean_output_tokens,
+            c.tokens_ci_low,
+            c.tokens_ci_high,
+            c.n_token_epochs,
+        )
+    if mean is None:
         return "—"
-    base = f"{c.mean_output_tokens:.0f}"
-    if c.tokens_ci_low is not None and c.tokens_ci_high is not None:
+    base = f"{mean:.0f}"
+    if lo is not None and hi is not None:
         # Same interval treatment as cost/latency — the tokens axis must not be the
         # one column whose computed uncertainty is silently dropped (round-3 review).
-        base += f" [{c.tokens_ci_low:.0f},{c.tokens_ci_high:.0f}]"
-    if c.n_token_epochs < c.n_epochs:  # partial coverage must be visible
-        base += f" ({c.n_token_epochs}/{c.n_epochs})"
+        base += f" [{lo:.0f},{hi:.0f}]"
+    if cov < c.n_epochs:  # partial coverage must be visible
+        base += f" ({cov}/{c.n_epochs})"
     return base
 
 
-def _print_report(cells: list, *, x_axis: str = "cost") -> None:  # type: ignore[type-arg]
+def _print_report(cells: list, *, x_axis: str = "latency") -> None:  # type: ignore[type-arg]
     """Render report cells: quality (±epoch CI), cost, latency, tokens, Pareto, leakage."""
     table = Table(title=f"report — quality vs {x_axis} (epochs = exploratory run-variance)")
+    tok_col = "tot-tok" if x_axis == "throughput" else "out-tok"
     for col in (
         "task",
         "model",
@@ -456,7 +480,7 @@ def _print_report(cells: list, *, x_axis: str = "cost") -> None:  # type: ignore
         "CI(epoch)",
         "cost$",
         "lat s",
-        "out-tok",
+        tok_col,
         "",
     ):
         table.add_column(col)
@@ -468,7 +492,8 @@ def _print_report(cells: list, *, x_axis: str = "cost") -> None:  # type: ignore
                 ("⚠LEAK", c.leakage),
                 ("⚠SPEC", c.n_spec > 1),
                 ("⚠VER", c.n_grader_versions > 1),
-                (f"⚠{c.n_unparseable}unp", c.n_unparseable > 0),
+                (f"⚠{c.n_unparseable}/{c.n_epochs}unp", c.n_unparseable > 0),
+                (f"⚠{c.n_dropped}drop", c.n_dropped > 0),
             )
             if on
         )
@@ -483,51 +508,70 @@ def _print_report(cells: list, *, x_axis: str = "cost") -> None:  # type: ignore
             ci,
             _with_interval(c.mean_cost, c.cost_ci_low, c.cost_ci_high, 4),
             _with_interval(c.mean_latency, c.latency_ci_low, c.latency_ci_high, 1),
-            _fmt_tokens(c),
+            _fmt_tokens(c, x_axis),
             flags,
         )
     console.print(table)
     console.print(
         f"★ = Pareto-optimal (quality vs {x_axis}) · ⚠LEAK = shuffled-label self-test off 0.5 · "
         "⚠SPEC = cell mixes task specs · ⚠VER = cell mixes grader versions · "
-        "⚠Nunp = N unparseable epochs counted as honest 0.0 · "
+        "⚠n/Nunp = n of N epochs unparseable, counted as honest 0.0 (model quality) · "
+        "⚠Ndrop = N non-ok runs (parse_fail/infra/timeout) excluded from the mean · "
         "every [lo,hi] at <5 epochs is the min–max epoch range, not a 95% CI · "
-        "out-tok (n/N) = tokens measured on n of N epochs"
+        "tot-tok/out-tok (n/N) = tokens measured on n of N epochs"
     )
 
 
-def _print_advice(advice: list, reflex: str, margin: float) -> None:  # type: ignore[type-arg]
-    """Render per-(task, variant) cost recommendations (biggest overpay first)."""
+def _print_advice(advice: list, reflex: str, margin: float, x_axis: str = "latency") -> None:  # type: ignore[type-arg]
+    """Render per-(task, variant) recommendations, led by and ordered on ``x_axis``."""
+    axis_label = {
+        "latency": "latency (s)",
+        "throughput": "total tokens",
+        "cost": "$ (API-equiv)",
+    }.get(x_axis, x_axis)
     table = Table(
-        title=f"advise — cheapest config within margin {margin:g} of the best (vs {reflex})"
+        title=f"advise — non-inferior config within margin {margin:g} of the best, "
+        f"ranked by {axis_label} (vs {reflex})"
     )
-    for col in ("task", "variant", "reflex→use", "save$", "×", "qual", "n", "Δlat s", "why"):
+    for col in ("task", "variant", "reflex→use", "qual", "n", "Δlat s", "Δtok", "$ (info)", "why"):
         table.add_column(col)
     total = 0.0
-    any_fallback = any_suspect = any_vacuous = False
+    any_fallback = any_suspect = any_vacuous = any_notok = False
     for a in advice:
-        if not a.vacuous:  # a vacuous row (best ≤ margin) is not a real overpay
-            total += max(0.0, a.cost_saving)
+        lead_saving = {
+            "latency": a.latency_saving,
+            "throughput": a.throughput_saving,
+            "cost": a.cost_saving,
+        }[x_axis]
+        if not a.vacuous and lead_saving is not None:  # a vacuous row (best ≤ margin) isn't a win
+            total += max(0.0, lead_saving)
         any_fallback = any_fallback or a.reflex_fallback
         any_suspect = any_suspect or a.suspect
         any_vacuous = any_vacuous or a.vacuous
+        any_notok = any_notok or a.throughput_saving is None
         star = "*" if a.reflex_fallback else ""
         table.add_row(
             a.task_id,
             a.variant,
             f"{a.reflex_model}/{a.reflex_effort}{star}→{a.rec_model}/{a.rec_effort}",
-            _fmt(a.cost_saving, 4),
-            "—" if a.cost_multiple is None else f"{a.cost_multiple:.1f}×",
             _fmt(a.rec_value),
             str(a.n_epochs),
             _fmt(a.latency_saving, 1),
+            "—" if a.throughput_saving is None else _fmt(a.throughput_saving, 0),
+            _fmt(a.cost_saving, 4),
             a.note,
         )
     console.print(table)
+    unit = {
+        "latency": f"{total:.1f}s",
+        "throughput": f"{total:,.0f} tokens",
+        "cost": f"${total:.4f}",
+    }[x_axis]
     legend = [
-        f"Σ per-run overpay (excl. n/a rows): [bold]${total:.4f}[/bold]",
+        f"Σ per-run {axis_label} saved (excl. n/a rows): [bold]{unit}[/bold]",
         "qual = recommended config's absolute mean quality",
-        "Δlat s = reflex − use (negative = cheaper yet slower)",
+        "Δlat s = reflex − use (negative = cheaper yet slower); Δtok = total (input+output+cache) saved",
+        "$ (info) = API-equivalent only — a flat subscription bills none of it",
         "a point estimate at n epochs (run-variance, not a population; `report` has the CIs)",
     ]
     if any_fallback:
@@ -536,6 +580,8 @@ def _print_advice(advice: list, reflex: str, margin: float) -> None:  # type: ig
         legend.append(
             "⚠suspect = a report validity flag (leakage / mixed spec / grader-version / unparseable)"
         )
+    if any_notok:
+        legend.append("Δtok — = pre-token ledger (no throughput on rows before 2026-07-06)")
     if any_vacuous:
         legend.append("n/a = best config scores ≤ margin (nothing meaningfully works)")
     console.print(" · ".join(legend))
@@ -559,6 +605,9 @@ def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-a
     for d in deltas:
         ci = f"[{_fmt(d.ci_low)},{_fmt(d.ci_high)}]" if d.ci_low is not None else "—"
         p = "—" if d.p_value is None else f"{d.p_value:.3g} (n≠0: {d.n_nonzero})"
+        note = d.note
+        if d.n_unparseable:  # the delta rests on means that fold these in at 0.0
+            note = f"{note} ⚠{d.n_unparseable}unp".strip()
         table.add_row(
             d.task_id,
             str(d.n_pairs),
@@ -568,12 +617,13 @@ def _print_compare(deltas: list, a: str, b: str) -> None:  # type: ignore[type-a
             ci,
             p,
             "[green]yes[/green]" if d.real else "no",
-            d.note,
+            note,
         )
     console.print(table)
     console.print(
         "[dim]real? = exact sign-flip permutation test at α=0.05 (needs ≥6 nonzero pairs); "
-        "the bootstrap CI is effect-size context, never the verdict.[/dim]"
+        "the bootstrap CI is effect-size context, never the verdict. "
+        "⚠Nunp = N unparseable rows (scored 0.0) underlie this delta — read with care.[/dim]"
     )
 
 

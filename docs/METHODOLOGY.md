@@ -6,7 +6,7 @@ How the harness produces trustworthy numbers. Expanded as phases land.
 
 - **Unit of measurement:** a *cell* = `(task, model, effort, variant, epoch)`. Each cell is one headless `claude -p` run, graded to a score in `[0, 1]`, with `cost_usd`, `latency_s`, and a `status`.
 - **Variant = `infra_repo@ref`:** the configuration under test, materialized as a git worktree so a run loads exactly that project's `CLAUDE.md`/`.claude`.
-- **Comparability metric:** `total_cost_usd` (API-equivalent; on a subscription it is a metric, not a charge). Optimize *cheapest-per-successful-outcome*, not cheapest-per-token.
+- **Comparability axes:** the binding budgets are **latency** (wall-clock to a good outcome) and **efficiency** (total token/context throughput incl. input+cache — the rate-limit-headroom cost). `total_cost_usd` (API-equivalent) is retained only as *one comparability metric* — on a flat subscription it is a metric, not a charge. Optimize *per-successful-outcome* on the axes that bind, not cheapest-per-token.
 
 ## Statistical discipline
 
@@ -20,9 +20,11 @@ How the harness produces trustworthy numbers. Expanded as phases land.
   a verdict). The paired-bootstrap CI is **effect-size context only** — a same-sign
   percentile-bootstrap CI excludes 0 by construction at any magnitude (measured
   Type-I ≈ 21% at n=4), so it must never be the decision rule (2026-07-01 audit).
-- `advise` gives the last-mile **cost verdict** over the `report` cells: per (task, variant), the
-  cheapest config within `margin` of the **best** config that ran, plus the dollars and latency
-  saved versus a reflex config (e.g. `opus/max`). Flooring at the *best*, not the reflex, is
+- `advise` gives the last-mile **efficiency verdict** over the `report` cells: per (task, variant), the
+  non-inferior config within `margin` of the **best** config that ran, ranked by the selected `--x-axis`
+  (default **latency**; also **throughput** = total input+output+cache tokens, or **cost**), with the
+  savings versus a reflex config (e.g. `opus/max`) and API-equivalent dollars kept as a demoted
+  comparability column. Flooring at the *best*, not the reflex, is
   deliberate — a reflex that itself fails must not drag the floor down to admit a cheaper *failing*
   config. Non-inferiority is a **margin** on the mean (`mean_value ≥ best − margin`, default `0.02`),
   a point estimate rather than a p-value: `advise` sees only per-cell epoch means, and at these epoch
@@ -36,10 +38,14 @@ How the harness produces trustworthy numbers. Expanded as phases land.
   flagged `*`); and `latency saved` may be negative (cheaper yet slower) — shown signed, never hidden.
   **Scope:** this sees model×effort cost/latency-vs-quality only — workflow-level spend (multi-agent
   review, planning rounds) is outside a single-task harness.
-- `infra_error` / `timeout` / `rate_limited` cells are **excluded from quality
-  aggregation** but their rate is always reported (don't mistake infra failure for
-  model failure). `unparseable` grades are the opposite case — the model produced
-  ungradeable output — and count as their honest **0.0** (surfaced per cell as ⚠unp).
+- `infra_error` / `timeout` / `rate_limited` / `parse_fail` runs (all `run_status != ok`)
+  are **excluded from quality aggregation** but now **counted per cell as `n_dropped`**
+  (`⚠Ndrop`) so a systematic failure can't hide behind the epochs that did run (don't
+  mistake infra failure for model failure). ⚠ **Naming collision:** `run_status = parse_fail`
+  (the *harness* couldn't parse the CLI's JSON envelope — infra-class, excluded → `n_dropped`)
+  is a different axis from `grade_status = unparseable` (the *model* produced ungradeable
+  output — a genuine quality failure, **included** at its honest **0.0**, surfaced per cell
+  as `⚠n/Nunp`).
 
 ## Self-tests and leakage defenses
 
@@ -106,10 +112,13 @@ Scoring is **anti-gaming by construction** (a pre-build adversarial design revie
 
 **Run done (t5, 2026-07-03):** the 27-cell `t5` sweep (3 models × {low, high, max} × 3 epochs) fed
 `ablation advise --reflex opus/max`, and the discriminating task did its job. It **separates** (haiku
-~0.10 below the field — not saturated) yet the opus/max reflex **does not earn its keep**: opus/max
-(0.978) ties sonnet/high (0.978) to four decimals at 3.6× the cost and ~200s more latency, and `max`
-effort was waste on every model. So the "opus earns it on hard authoring" hypothesis is tested and
-falsified on this probe. (`t6` stays sandbox-gated — not run.)
+~0.10 below the field — not saturated) yet on this **single-turn constrained MDX-repair** task the
+opus/max reflex **does not earn its keep**: opus/max (0.978) ties sonnet/high (0.978) to four decimals
+at 3.6× the cost and ~200s more latency; higher `max` effort added no gain on the effort-capable models
+(Haiku has no effort parameter, so its low/high/max spread is n=3 noise). So the "opus earns it on hard
+*authoring*" hypothesis is **narrowed, not closed** — t5 is bounded repair, not open-ended authoring,
+which stays untested (the provisional LLM-judge phase is its first probe); and "no edge" is *not
+detected at this power*, not *absent*. (`t6` stays sandbox-gated — not run.)
 
 ## Showcase pre-registration (2026-07-02, committed before any sweep cell ran)
 
@@ -168,7 +177,7 @@ matched (model, effort) config pairs) runs under the following rules, fixed in a
 
 The measurement instruments were audited against the eval-methodology literature on 2026-07-07 (`docs/audits/2026-07-07_literature-gap-analysis.md`, backed by three strict-live research dossiers); most are aligned with published practice. The paired **exact sign-flip permutation** verdict is the randomization-test family the NLP significance canon prescribes for comparisons on shared items (Yeh 2000; Dror et al. 2018), and `MIN_PAIRS_FOR_REAL=6` is exactly where an exact two-sided p first reaches 0.05. The **judge protocol** — pairwise with order-swap, tie on order-flip, blinding, a length control, and a controls-gate — has direct antecedents: Zheng et al. 2023 for the agreement bar (scored *without ties*, per its Tables 5/6 — the basis of the 2026-07-07 spot-check gate fix), Wang et al. 2023 for swap-and-aggregate, Panickssery 2024 for cross-vendor as a self-preference mitigation, Zeng 2024 / Li 2024 for adversarial judge validation and separability-by-CI. The **checklist grader** follows the decomposition principle (Cook 2024 TICK; Kim 2023 Prometheus).
 
-Positioning: the closest peer is **HAL** (Kapoor 2025), which ranks many agents on *public* benchmarks under *metered* API cost; this lab instead ablates *one* agent's `(model, effort, config)` defaults on *private, discriminating* tasks over a *flat-rate* CLI, gated for leakage. Routing work (FrugalGPT, RouteLLM) optimizes *per-query* model choice under metered cost — the mirror image of this lab's *per-workload default* choice. The lab's "higher effort rarely helps, sometimes hurts" observation is **corroboration** of published work (HAL; the overthinking/inverted-U line), not a novel claim; the contribution is the leakage-gated, cost/latency/token-frontier ablation harness. Two limitations the audit surfaced: small-n grids are under-powered (a "no edge" is "not detected," not "absent"), and public-source probes are not yet contamination-screened.
+Positioning: the closest peer is **HAL** (Kapoor 2025), which ranks many agents on *public* benchmarks under *metered* API cost; this lab instead ablates *one* agent's `(model, effort, config)` defaults on *private, discriminating* tasks over a *flat-rate* CLI, gated for leakage. Routing work (FrugalGPT, RouteLLM) optimizes *per-query* model choice under metered cost — the mirror image of this lab's *per-workload default* choice. The lab's "higher effort rarely helps, sometimes hurts" observation (on **single-turn** probes) is **corroboration** of published work (HAL; the overthinking/inverted-U line), not a novel claim; the contribution is the leakage-gated, cost/latency/token-frontier ablation harness. Two limitations the audit surfaced: small-n grids are under-powered (a "no edge" is "not detected," not "absent"), and public-source probes are not yet contamination-screened.
 
 ## Audit trail
 
@@ -183,5 +192,5 @@ Positioning: the closest peer is **HAL** (Kapoor 2025), which ranks many agents 
 | 2026-07-02 | **Public showcase run** (54 cells, the pre-registered primary) | 54/54 `ok`, 0 unparseable, 18/18 configs at 3/3 epochs; t4 A/B: 6/6 pairs 0.0→1.0, Δ=+1.000, exact p=0.0312, `real=yes`; t3 saturated at 1.000; sanitized ledger (`results/showcase.jsonl`, sanitizer caught a live absolute-path leak in `infra_repo` on first use) + figures committed |
 | 2026-07-02 | D6 hardening (PR #11 review follow-ups) | task-scoped tool policy (agentic tasks declare `tools:`, no more hand-relaxing the runner); tool deny-list catalog live-verified against the installed CLI, catching a dead `"SlashCommand"` entry that gave zero actual protection; in-band mechanism capture via `stream-json` replaces the now-impossible session-file harvest; sanitizer inverted to an allow-list (`KEEP_FIELDS`) — `docs/design/2026-07-01_phase6-deferrals.md` §D6, `docs/design/2026-07-02_t2-runway.md` |
 | 2026-07-02 | D6 hardening — 3-voice adversarial review (codex + gemini + blind Claude subagent) | caught and fixed a live regression this PR would otherwise have shipped: `capture_mechanism`'s new default combined with T1's `--json-schema` would have silently broken every T1 cell (`--json-schema` is implemented as a synthetic `StructuredOutput` tool call, confirmed live, which the hermetic default was about to deny); also fixed `task.tools` YAML validation, `spec_sha` now covering tool-policy changes, `tools_used`/`tool_calls` `None`-vs-`{}` (not-measured vs. measured-zero) semantics, `estimate` sharing `run`'s version gate, and a CI-portability bug (the version gate broke on any machine without a `claude` binary matching the pin, including GitHub Actions — caught by literally stripping `claude` from `PATH` and re-running the suite). 5 findings refuted with evidence. Full tally — `docs/design/2026-07-02_d6-review.md` |
-| 2026-07-02 | `advise` — cost-frontier verdict (Phase 1) + 3-voice review | turns `report` into the "where am I overpaying?" answer: cheapest config within `margin` of the **best** that ran, saving vs a reflex config, with a transparent fallback. On the committed showcase, opus→haiku is **11–15× cheaper for +0.000 quality** (Σ $0.1704) on the saturated t3/t4 tasks; the without-skill control is flagged `n/a` and excluded. A codex + gemini + blind-Claude review then fixed, before merge: a **best-floor** selection bug (a failing reflex could recommend a cheaper *failing* config), the vacuous-row Σ inflation (37% of the headline came from an all-zero control), a mislabel and dead `note` path, strict reflex parsing, and an **overclaim** — the margin decision is a data-plumbing + low-power limit, *not* "a p-value would be theatre" (configs do share task examples). Honest scope: overpay on *easy* work only — a discriminating task is the next build. Zero new quota; 282 tests green — `docs/design/2026-07-02_cost-benchmark-map.md` |
+| 2026-07-02 | `advise` — cost-frontier verdict (Phase 1) + 3-voice review | turns `report` into the "where am I overpaying?" answer: cheapest config within `margin` of the **best** that ran, saving vs a reflex config, with a transparent fallback. On the committed showcase, opus→haiku is **11–15× cheaper by API-equivalent proxy for +0.000 quality** (Σ $0.1704) on the saturated single-turn t3/t4 tasks; the without-skill control is flagged `n/a` and excluded. A codex + gemini + blind-Claude review then fixed, before merge: a **best-floor** selection bug (a failing reflex could recommend a cheaper *failing* config), the vacuous-row Σ inflation (37% of the headline came from an all-zero control), a mislabel and dead `note` path, strict reflex parsing, and an **overclaim** — the margin decision is a data-plumbing + low-power limit, *not* "a p-value would be theatre" (configs do share task examples). Honest scope: overpay on *easy* work only — a discriminating task is the next build. Zero new quota; 282 tests green — `docs/design/2026-07-02_cost-benchmark-map.md` |
 | 2026-07-07 | **Literature gap analysis** (instruments) | 3 strict-live dossiers (judge validity / eval statistics / eval-tooling, 59 sources, citation-audited + adversarially re-verified 0 drops) mapped ~18 house choices to the literature. Instruments **mostly aligned**; gaps: **P1** report nulls as power-bounded (n=10 sign test ~0.38 power at true 80% win-rate → "no opus edge" = "not detected"); **J4** equal-weight cross-judge mean contradicted (reliability-weighting beats it); **T1** discrimination-by-IRT is a real alternative to trial-and-error; **C1** public-source probes unscreened for contamination. Fixed the spot-check gate (tie-excluded, Zheng without-tie convention). Effort-finding confirmed **not novel** (HAL et al.); harness composite is — `docs/audits/2026-07-07_literature-gap-analysis.md` |

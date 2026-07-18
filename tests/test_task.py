@@ -32,7 +32,7 @@ def test_load_all_seed_tasks() -> None:
     assert tasks["t2_research_plan"].mode == "agent"
     assert tasks["t1_prompt_injection"].infra_repo is None
     assert tasks["t4_demo_infra"].infra_repo is not None  # infra-sensitive (the demo A/B)
-    assert tasks["t5_books_validate"].mode == "single"  # the discriminating authoring probe
+    assert tasks["t5_books_validate"].mode == "single"  # discriminating MDX-repair probe
     assert tasks["t6_books_validate_agent"].tools == ("Read", "Edit", "Write", "Bash")
     assert tasks["t7_find_bug"].mode == "single"  # reasoning pressure-test (find-the-bug)
     assert tasks["t7_find_bug"].grader == "exact_match_set"  # multi-bug, fraction-scored

@@ -6,10 +6,15 @@
 # T1/T2 are intentionally excluded: T1 needs the prompt-injection holdout, T2 needs an
 # external research_toolkit checkout. This grid stays cheap and reproducible by any reader.
 #
-# T4 gives exactly 6 matched (model, effort) configs under both refs. Six is the first
-# n where the exact sign-flip permutation test can reach p <= 0.05 (min p = 2/2^n:
-# 0.125 at 4 pairs, 0.031 at 6) — so the designed positive control can print an HONEST
-# real=yes verdict rather than a bootstrap tautology.
+# T4 was DESIGNED for 6 matched (model, effort) configs (haiku/sonnet/opus × low/high) —
+# 6 being the first n where the exact sign-flip test can reach p <= 0.05 (min p = 2/2^n:
+# 0.125 at 4, 0.031 at 6). HONESTY (CV2, 2026-07-11): Haiku 4.5 has NO effort parameter,
+# so haiku/low ≡ haiku/high — one inert config, not two. The capability matrix now
+# collapses it, so this grid yields only 5 distinct configs (below the floor: min p =
+# 2/2^5 = 0.0625), and the designed control can NO LONGER print real=yes on reproduction.
+# The committed 54-row ledger (results/showcase.jsonl) predates the matrix and stays valid
+# as history. TODO: add a genuine 6th config (e.g. a `medium` tier for sonnet+opus) and
+# re-run to restore an honest real=yes.
 models: [haiku, sonnet, opus]
 efforts: [low, high]
 variants:
@@ -18,6 +23,6 @@ variants:
   - .demo-infra@with-skill
 epochs: 3
 effort_support:
-  haiku: [low, high]
+  haiku: [low]
   sonnet: [low, high]
   opus: [low, high]

@@ -14,15 +14,18 @@ Two modes:
 - **numeric** (``gold.numeric: true``; t8 hard-math): **STRICT** — each answered position
   must be a *bare integer* (digits, optional leading sign, valid thousands groups only).
   Anything else — an equation, prose, a fraction, markdown, a stray number — makes the
-  **whole cell ``unparseable``** (excluded from the mean, *never* a silently-biased 0).
+  **whole cell ``unparseable``**: scored an honest ``0.0`` that **is included in the mean** (a
+  genuine quality failure), but **labelled and counted** (surfaced as ``n_unparseable`` and its
+  rate) rather than hidden inside an ``ok`` score.
   This is deliberate: three separate "lenient extraction" confounds (a spurious JSON array
   shadowing the answer; backtick wrapping; first-number-on-the-line) each scored *correct*
-  verbose answers as 0 and biased the A/B against high-effort models. Strict parsing removes
-  that biased *zero* — non-compliance surfaces as a visible ``unparseable`` count rather than a
-  corrupted score — but trades it for a *missing-data* bias if the unparseable rate is nonzero
-  and correlates with model/effort (a config that admits failure is dropped; one that guesses is
-  scored). So it is safe only when unparseables are ~0: treat a nonzero rate as an invalid-run /
-  gating signal, not neutral missing data. The task prompt demands a bare answer to keep it ~0.
+  verbose answers as 0 and biased the A/B against high-effort models. Strict parsing does **not
+  remove** that biased zero — the ``0.0`` still enters the mean — but it *labels* it so the
+  unparseable rate is measurable and can be gated on. It therefore stays a **biased zero against
+  verbose / high-effort output** whenever the unparseable rate is nonzero and correlates with
+  model/effort (nothing is dropped; a failing answer is scored 0, not excluded). So it is safe
+  only when unparseables are ~0: treat a nonzero rate as an invalid-run / gating signal. The task
+  prompt demands a bare answer to keep it ~0.
 
 gold:
   expected: ["<answer 1>", "<answer 2>", ...]   # ordered; position k <-> ANSWER k

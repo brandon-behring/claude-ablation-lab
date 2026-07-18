@@ -1,13 +1,14 @@
-# books-validate pilot grid — the discriminating authoring probe.
+# books-validate pilot grid — the discriminating constrained-MDX-repair probe.
 #   t5_books_validate        → variant `none` (single-turn, infra-agnostic)
 #   t6_books_validate_agent  → the .books-validate@v1 worktree (run examples/books-validate/setup.sh
 #                              first, from the REPO ROOT — the `.books-validate` string resolves
 #                              against the directory you invoke `ablation` from)
 #
-# The literal reflex under test is opus/max, so `max` effort IS in the grid this time — verified
-# live that `claude --effort` accepts low|high|max for every model, so no effort_support restriction
-# (whether `max` changes anything on haiku is itself the measurement). 3 models × 3 efforts × 3
-# epochs = 27 cells per task. Feed the resulting ledger to `ablation advise --reflex opus/max`.
+# The literal reflex under test is opus/max, so `max` effort IS in the grid this time. Haiku 4.5
+# has NO effort parameter (CV2), so its efforts are inert — the capability matrix collapses haiku to
+# one canonical cell. sonnet/opus × {low,high,max} + haiku × {low} = 7 configs × 3 epochs = 21 cells
+# per task. (The committed pilot ledger predates the matrix; its 27-cell run stays valid as history.)
+# Feed the resulting ledger to `ablation advise --reflex opus/max`.
 #
 # BUILD + DRY-RUN ONLY here; the model×effort run is a separate, explicit quota go.
 #
@@ -22,3 +23,8 @@ variants:
   - none
   - .books-validate@v1
 epochs: 3
+
+# Haiku 4.5 has NO effort parameter (CV2) — the capability matrix collapses it to one
+# canonical cell; pinned here for clarity. sonnet/opus keep {low, high, max}.
+effort_support:
+  haiku: [low]

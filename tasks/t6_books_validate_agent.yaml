@@ -1,4 +1,4 @@
-# T6 — books authoring, agentic (the DISCRIMINATING task, faithful shape).
+# T6 — constrained MDX repair, agentic (the DISCRIMINATING task, faithful shape). NOT open-ended authoring.
 # Same fixture as t5, but the model works IN a `.books-validate@v1` worktree (built by
 # examples/books-validate/setup.sh): it reads CLAUDE.md + registries, edits chapter.mdx in place,
 # and can run `python3 validate_fixture.py chapter.mdx` itself and iterate. The edited chapter is
@@ -15,12 +15,12 @@
 #     (or after the answer key is moved out of the checkout/public repo). t5_books_validate has no
 #     tools and no leak — it is the clean pilot; run it first.
 id: t6_books_validate_agent
-domain: authoring
+domain: mdx_repair
 grader: books_validate
 mode: agent
 infra_repo: .books-validate
 timeout_s: 600
-tags: [authoring, agentic, agent-loop, discriminating, mdx]
+tags: [constrained-repair, agentic, agent-loop, discriminating, mdx]
 prompt: ""
 params:
   artifact: chapter.mdx
