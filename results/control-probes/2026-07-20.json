@@ -1,0 +1,57 @@
+{
+  "_meta": {
+    "date": "2026-07-20",
+    "instrument": "claude_ablation_lab.control (paired rule, decision 16)",
+    "cli_version": "2.1.214",
+    "axis": "output_tokens (Claude reports no reasoning split)",
+    "prompts": "control.PROBE_PROMPTS — batches 1-2 used prompts 1-8; batch 3+ uses all 16",
+    "pairing": "index i in every arm is prompt i; arms within a batch are item-paired",
+    "note": "batch 1 of sonnet/haiku was first collected 2026-07-20; sonnet batch 2 same day"
+  },
+  "claude-sonnet-5": {
+    "batch1": {
+      "low": [526, 1559, 130, 813, 739, 16422, 167, 684],
+      "high": [687, 1849, 575, 2118, 1163, 1620, 406, 3765]
+    },
+    "batch2": {
+      "low": [555, 1472, 299, 806, 700, 1521, 224, 2040],
+      "high": [783, 2173, 1017, 1488, 1077, 21268, 407, 1877]
+    },
+    "verdict": {
+      "rule": "paired signed-rank + equivalence, per-item geo-mean across batches",
+      "result": "applied",
+      "p_value": 0.0039,
+      "median_ratio": 1.83,
+      "ratio_ci_high": 2.25,
+      "n_pairs": 8
+    }
+  },
+  "claude-haiku-4-5": {
+    "batch1": {
+      "low": [888, 2556, 1301, 2921, 1225, 7925, 681, 10735],
+      "high": [793, 3874, 1795, 1142, 1547, 21450, 764, 4377]
+    },
+    "batch2_16items": {
+      "low": [971, 2927, 1230, 3592, 1672, 15624, 677, 5571, 1107, 3477, 1256, 2493, 2483, 6182, 1106, 2292],
+      "high": [963, 2727, 1711, 2320, 1423, 16883, 650, 8223, 3028, 4812, 1085, 1869, 2678, 6224, 1383, 3284]
+    },
+    "batch3_16items": {
+      "low": "ARRAYS LOST — the launch pipe's tail -6 truncated the safety print; verdict JSON below is self-contained",
+      "high": "ARRAYS LOST — same",
+      "verdict_standalone": {
+        "result": "no_op",
+        "p_value": 0.874,
+        "median_ratio": 0.934,
+        "ratio_ci_high": 1.088,
+        "n_pairs": 16
+      }
+    },
+    "verdict": {
+      "rule": "paired signed-rank + equivalence (decision 16)",
+      "result": "no_op",
+      "evidence": "batch 3 standalone affirms equivalence (median 0.934, CI hi 1.088 < 1.25, n=16); batch 1+2 pooled was inconclusive (median 1.058, CI hi 1.384); median ratios across batches 1.19 -> 1.04 -> 0.93 oscillate around 1.0, while sonnet-5's sit at 1.8-2.0",
+      "agreement": "matches the Models API capability read (claude-haiku-4-5 exposes no effort parameter) — behavioral and declarative evidence arrived independently",
+      "gate": "task-3 gate CLOSED 2026-07-20: the haiku no-op reproduced from live token distributions with no hardcoded table"
+    }
+  }
+}

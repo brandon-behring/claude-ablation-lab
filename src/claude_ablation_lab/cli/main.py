@@ -79,6 +79,76 @@ def version() -> None:
 
 
 @app.command()
+def control(
+    model: Annotated[str, typer.Argument(help="Model id/alias, e.g. claude-sonnet-5.")],
+    tiers: Annotated[
+        list[str],
+        typer.Argument(
+            help="Effort tiers low→high (or 'default' to omit the flag). "
+            "Adjacent pairs are classified, e.g.: control claude-sonnet-5 low high"
+        ),
+    ],
+    probes: Annotated[
+        int, typer.Option(help="Probe prompts per tier (from the bundled hard set).")
+    ] = 8,
+    timeout_s: Annotated[float, typer.Option(help="Per-probe wall-clock cap.")] = 600.0,
+) -> None:
+    """Effort-validity pre-flight: is each tier actually APPLIED, or a silent no-op?
+
+    Classifies each adjacent tier pair from realized output-token distributions with
+    the three-verdict rule (applied / no_op / inconclusive). Deliberately sends the
+    ``--effort`` flag *without* capability validation — detecting a silent clamp
+    requires sending the flag production code refuses. An ``inconclusive`` verdict
+    means "collect more probes", never either other verdict; a ``no_op`` pair must be
+    collapsed to one arm in any downstream grid.
+    """
+    from claude_ablation_lab.control import PROBE_PROMPTS, decide_pair, probe_cli_tokens
+
+    if len(tiers) < 2:
+        console.print("[red]need at least two tiers to classify a pair[/red]")
+        raise typer.Exit(1)
+    prompt_set = PROBE_PROMPTS[: max(3, min(probes, len(PROBE_PROMPTS)))]
+
+    samples: dict[str, list[int]] = {}
+    for tier in tiers:
+        console.print(f"probing {model} @ {tier} ({len(prompt_set)} probes)...")
+        samples[tier] = probe_cli_tokens(
+            model, None if tier == "default" else tier, prompts=prompt_set, timeout_s=timeout_s
+        )
+
+    table = Table(title=f"effort-validity: {model}")
+    for column in ("pair", "verdict", "p (signed-rank)", "median ratio", "ratio CI hi", "n"):
+        table.add_column(column)
+    exit_code = 0
+    for lower, higher in zip(tiers, tiers[1:], strict=False):
+        try:
+            result = decide_pair(
+                samples[lower], samples[higher], model=model, lower_tier=lower, higher_tier=higher
+            )
+        except ValueError as exc:
+            console.print(f"[red]{lower}->{higher}: {exc}[/red]")
+            exit_code = 2
+            continue
+        style = {"applied": "green", "no_op": "yellow", "inconclusive": "red"}[result.verdict]
+        table.add_row(
+            f"{lower}->{higher}",
+            f"[{style}]{result.verdict}[/{style}]",
+            f"{result.p_value:.4f}",
+            f"{result.median_ratio:.2f}",
+            f"{result.ratio_ci_high:.2f}",
+            str(result.n_pairs),
+        )
+        if result.verdict != "applied":
+            exit_code = max(exit_code, 1)
+    console.print(table)
+    console.print(
+        "[dim]proxy axis: total output tokens (Claude reports no reasoning split); "
+        "no_op pairs must be collapsed; inconclusive means collect more probes[/dim]"
+    )
+    raise typer.Exit(exit_code)
+
+
+@app.command()
 def run(
     suite: Annotated[Path, typer.Argument(help="Task-suite dir or a single task YAML")],
     grid: Annotated[Path, typer.Argument(help="Grid spec YAML")],

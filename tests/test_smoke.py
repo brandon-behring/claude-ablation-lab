@@ -33,6 +33,7 @@ def test_cli_exposes_exactly_the_expected_commands() -> None:
     }
     assert registered == {
         "version",
+        "control",
         "run",
         "regrade",
         "estimate",
